@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.6.0]
+
+### Added
+
+- A **Servers** tab that takes a snapshot of an Ubuntu or Debian server over
+  SSH, signing in with a password or a key file. It shows the operating
+  system, kernel, installed packages, waiting updates (security updates
+  marked) and whether a reboot is needed, and saves them as CSV or JSON.
+  Host keys are checked against `~/.ssh/known_hosts`.
+
 ## [1.5.0]
 
 ### Changed

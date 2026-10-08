@@ -1,4 +1,4 @@
-//! Users in and out of CSV files.
+//! Users in and out of CSV files, and logs and server packages out.
 //!
 //! The import reads a header row and matches columns by name, ignoring case,
 //! spaces and underscores, so `userPrincipalName`, `User Principal Name` and
@@ -11,6 +11,7 @@ use std::path::Path;
 use crate::graph::logs::{DirectoryAudit, SignIn, log_time};
 use crate::graph::models::User;
 use crate::graph::users::NewUser;
+use crate::servers::Snapshot;
 
 /// The columns the import understands, in the order the template writes them.
 pub const IMPORT_COLUMNS: &[&str] = &[
@@ -248,6 +249,45 @@ pub fn write_users(path: &Path, users: &[&User]) -> Result<(), String> {
                 s(&u.user_type),
                 s(&u.created_date_time),
                 b(u.on_premises_sync_enabled),
+            ])
+            .map_err(|e| e.to_string())?;
+    }
+    writer.flush().map_err(|e| e.to_string())
+}
+
+/// Every package on a server, one per row, with the update waiting for it.
+/// The server's own details are repeated on each row, so the files from
+/// several servers can be pasted together and still be told apart.
+pub fn write_packages(path: &Path, snapshot: &Snapshot) -> Result<(), String> {
+    let mut writer = csv::Writer::from_path(path).map_err(|e| e.to_string())?;
+    writer
+        .write_record([
+            "address",
+            "hostname",
+            "os",
+            "kernel",
+            "taken",
+            "package",
+            "version",
+            "architecture",
+            "updateAvailable",
+            "securityUpdate",
+        ])
+        .map_err(|e| e.to_string())?;
+    for p in &snapshot.packages {
+        let upgrade = snapshot.upgrade_for(&p.name);
+        writer
+            .write_record([
+                to_cell(&snapshot.address),
+                to_cell(&snapshot.hostname),
+                to_cell(&snapshot.os),
+                to_cell(&snapshot.kernel),
+                snapshot.taken.clone(),
+                to_cell(&p.name),
+                to_cell(&p.version),
+                to_cell(&p.architecture),
+                to_cell(upgrade.map_or("", |u| u.available.as_str())),
+                upgrade.is_some_and(|u| u.security).to_string(),
             ])
             .map_err(|e| e.to_string())?;
     }

@@ -1,6 +1,6 @@
 [package]
 name = "mainstone"
-version = "1.5.0"
+version = "1.6.0"
 edition = "2024"
 description = "Mainstone Cloud System: users, groups and devices in Microsoft Entra ID and Intune, with CSV import and export and a copy to MariaDB"
 license = "MIT"
@@ -44,6 +44,12 @@ ureq = { version = "3.4", default-features = false, features = ["rustls", "json"
 # `ring` matches what ureq picks, since rustls chooses one crypto provider for
 # the whole process and two crates disagreeing is a panic on first connect.
 mysql = { version = "28", default-features = false, features = ["minimal", "buffer-pool", "rustls-tls-ring"] }
+# SSH for the Servers tab. Pure Rust, like the rest: `ring` again rather
+# than russh's default aws-lc-rs, for the same one-provider reason as above.
+# russh is async, so each snapshot runs a small single-threaded tokio runtime
+# on its own background thread.
+russh = { version = "0.64", default-features = false, features = ["ring", "rsa", "flate2"] }
+tokio = { version = "1", features = ["rt", "net", "time"] }
 
 [profile.release]
 opt-level = 2

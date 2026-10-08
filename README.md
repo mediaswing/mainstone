@@ -96,7 +96,8 @@ sign-in, which accepts connections only from the same computer.
 
 ### Where things are kept
 
-The tenant ID, the client ID and the MariaDB server details are saved in
+The tenant ID, the client ID, the MariaDB server details and the last server
+snapshotted on the Servers tab are saved in
 `config.json` in the app's data directory:
 
 - macOS: `~/Library/Application Support/GraphicalCloudManager`
@@ -137,7 +138,7 @@ rotated in Entra, sign in once with the new value and the file is updated.
 
 ## The window
 
-Eight tabs run down the left-hand side, the same layout as
+Nine tabs run down the left-hand side, the same layout as
 [watchspend](https://github.com/mediaswing/watchspend). The status bar along
 the bottom shows which tenant you are signed in to, what the app is doing,
 and the result of the last action. Every Graph and MariaDB call runs in the
@@ -242,6 +243,34 @@ more; a shorter range or a single user brings in the rest. Entra keeps both
 logs for 7 days, or 30 with Entra ID P1 or P2. Reading sign-ins through
 Microsoft Graph needs one of those licences in the tenant; the audit log
 does not.
+
+**Servers** takes a snapshot of an Ubuntu or Debian server over SSH. It
+works with any server you can reach, not just ones in the tenant, and does
+not need you to be signed in. Enter the host, port and user, then sign in
+with either a password or a private key file (OpenSSH format, with its
+passphrase if it has one). The snapshot shows:
+
+- the operating system, kernel, architecture and uptime
+- every installed package and its version
+- the updates waiting, with security updates marked
+- whether a reboot is needed, either because the server says so or because
+  a newer kernel is installed than the one running
+- when the server last refreshed its update lists, and when apt last
+  installed anything
+
+Nothing on the server is changed, and nothing needs root. The pending
+updates are apt's own list, as of the last time the server refreshed it.
+Ubuntu does that daily by itself, and the snapshot shows when it last
+happened. **Save CSV…** writes one row per package, and **Save JSON…**
+writes the whole snapshot. Snapshots are kept only until the app is closed.
+
+The server's host key is checked against `~/.ssh/known_hosts`, the file
+`ssh` itself uses. A server that is already trusted there is trusted here
+too. A new server shows its key fingerprint and asks before it is added. A
+server whose key has changed is refused. Passwords and passphrases are never
+saved. If the server accepts only keyboard-interactive sign-in, the password
+is offered that way. Windows servers are not supported yet. Other Linux
+systems report their name and kernel, but no packages.
 
 **Export** copies the directory into a MariaDB or MySQL server; see below.
 

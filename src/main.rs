@@ -10,6 +10,7 @@ mod export;
 mod graph;
 mod logging;
 mod secrets;
+mod servers;
 mod task;
 mod theme;
 mod ui;

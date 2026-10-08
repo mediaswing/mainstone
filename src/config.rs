@@ -1,5 +1,6 @@
 //! What the app remembers between runs: which tenant and app registration to
-//! sign in as, where the MariaDB server is, and light or dark.
+//! sign in as, where the MariaDB server is, the last server snapshotted over
+//! SSH, and light or dark.
 //!
 //! Neither secret is in here. The client secret and the MariaDB password go in
 //! a separate read-only file in the home directory (see [`crate::secrets`]),
@@ -10,6 +11,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::export::MariaDbSettings;
+use crate::servers::ServerSettings;
 
 /// Light, dark, or whatever this computer is set to.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -50,6 +52,8 @@ pub struct Config {
     /// The application (client) ID of the app registration.
     pub client_id: String,
     pub mariadb: MariaDbSettings,
+    /// The server on the Servers tab.
+    pub server: ServerSettings,
     /// Write a detailed log to `gcm-debug.log`; see [`crate::logging`]. On
     /// unless switched off.
     pub debug_logging: bool,
@@ -67,6 +71,7 @@ impl Default for Config {
             tenant_id: String::new(),
             client_id: String::new(),
             mariadb: MariaDbSettings::default(),
+            server: ServerSettings::default(),
             debug_logging: true,
             check_for_updates: true,
             skipped_update: None,

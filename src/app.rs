@@ -17,18 +17,20 @@ pub enum Tab {
     Devices,
     Licensing,
     Logs,
+    Servers,
     Export,
     Settings,
 }
 
 impl Tab {
-    const ALL: [Self; 8] = [
+    const ALL: [Self; 9] = [
         Self::Connection,
         Self::Users,
         Self::Groups,
         Self::Devices,
         Self::Licensing,
         Self::Logs,
+        Self::Servers,
         Self::Export,
         Self::Settings,
     ];
@@ -41,6 +43,7 @@ impl Tab {
             Self::Devices => "Devices",
             Self::Licensing => "Licensing",
             Self::Logs => "Logs",
+            Self::Servers => "Servers",
             Self::Export => "Export",
             Self::Settings => "Settings",
         }
@@ -75,6 +78,7 @@ pub struct App {
     pub devices: ui::devices::State,
     pub licensing: ui::licensing::State,
     pub logs: ui::logs::State,
+    pub servers: ui::servers::State,
     pub export: ui::export::State,
     pub update: ui::update::State,
 }
@@ -106,6 +110,7 @@ impl App {
             devices: ui::devices::State::default(),
             licensing: ui::licensing::State::default(),
             logs: ui::logs::State::default(),
+            servers: ui::servers::State::from_config(&config),
             export: ui::export::State::from_config(&config),
             update: ui::update::State::default(),
             config,
@@ -190,6 +195,7 @@ impl App {
             .or_else(|| self.devices.activity())
             .or_else(|| self.licensing.activity())
             .or_else(|| self.logs.activity())
+            .or_else(|| self.servers.activity())
             .or_else(|| self.export.activity())
             .or_else(|| self.update.activity())
     }
@@ -266,6 +272,7 @@ impl eframe::App for App {
         ui::devices::poll(self);
         ui::licensing::poll(self);
         ui::logs::poll(self);
+        ui::servers::poll(self);
         ui::export::poll(self);
 
         egui::Panel::left("tabs")
@@ -284,6 +291,7 @@ impl eframe::App for App {
                 Tab::Devices => ui::devices::show(self, ui),
                 Tab::Licensing => ui::licensing::show(self, ui),
                 Tab::Logs => ui::logs::show(self, ui),
+                Tab::Servers => ui::servers::show(self, ui),
                 Tab::Export => ui::export::show(self, ui),
                 Tab::Settings => ui::settings::show(self, ui),
             }
@@ -294,6 +302,7 @@ impl eframe::App for App {
         ui::groups::modals(self, &ctx);
         ui::devices::modals(self, &ctx);
         ui::licensing::modals(self, &ctx);
+        ui::servers::modals(self, &ctx);
         self.notice_modal(&ctx);
     }
 }

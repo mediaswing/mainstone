@@ -7,6 +7,7 @@ pub mod export;
 pub mod groups;
 pub mod licensing;
 pub mod logs;
+pub mod servers;
 pub mod settings;
 pub mod update;
 pub mod users;
