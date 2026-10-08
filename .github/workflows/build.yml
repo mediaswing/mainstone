@@ -1,0 +1,222 @@
+# Test on all three platforms, then package each one with mainstone-package, whose
+# platform-specific code is in src/package/. The workflow only calls cargo,
+# so a package built here and one built by hand on a Mac, an Ubuntu box or a
+# Windows PC come out the same.
+#
+# A push of a tag such as v1.0.0 also publishes the packages as a GitHub
+# release, with the "## [1.0.0]" section of CHANGELOG.md as its notes.
+
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+# Nothing below needs more than to read the repository, except the release
+# job, which asks for its own write access.
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  # The window-system headers winit needs on Linux, and dpkg-dev for the .deb.
+  LINUX_PACKAGES: >-
+    build-essential pkg-config perl make dpkg-dev
+    libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev
+    libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
+
+jobs:
+  test:
+    name: Test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update
+      - if: runner.os == 'Linux'
+        run: sudo apt-get install -y --no-install-recommends ${{ env.LINUX_PACKAGES }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --all-targets --locked -- -D warnings
+      - run: cargo test --locked
+
+  package:
+    name: Package (${{ matrix.name }})
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Apple silicon only. mainstone-package builds for the machine it runs
+          # on, and macos-latest is an Apple silicon runner, so the .app and
+          # its zip (mainstone-<version>-macos-aarch64.zip) are arm64. For one that
+          # also runs on Intel Macs, set args to --universal and targets to
+          # "aarch64-apple-darwin, x86_64-apple-darwin".
+          - name: macOS .app
+            os: macos-latest
+            args: ""
+            targets: ""
+            artifact: mainstone-macos
+            files: dist/*.zip
+            # The signed executable from inside the .app, copied out by
+            # mainstone-package under a name that says it is the macOS one.
+            scan: target/mainstone-macos
+          # The oldest LTS the runners offer, so the .deb's glibc requirement
+          # is one every current Ubuntu release meets.
+          - name: Ubuntu .deb
+            os: ubuntu-22.04
+            args: ""
+            targets: ""
+            artifact: mainstone-ubuntu
+            files: dist/*.deb
+            scan: dist/*.deb
+          - name: Windows .zip
+            os: windows-latest
+            args: ""
+            targets: ""
+            artifact: mainstone-windows
+            files: dist/*.zip
+            scan: target/release/mainstone.exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update
+      - if: runner.os == 'Linux'
+        run: sudo apt-get install -y --no-install-recommends ${{ env.LINUX_PACKAGES }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.targets }}
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo run --release --locked --bin mainstone-package -- ${{ matrix.args }}
+      # Submit what was just built to VirusTotal: the executable inside the
+      # .app, the .deb, and mainstone.exe. Skipped for pull requests, so the free
+      # API's daily quota goes on builds that matter, and for release tags,
+      # whose files the release job submits instead so that the reports can
+      # go on the release page. The links to each analysis are in this
+      # step's log.
+      - name: Submit to VirusTotal
+        if: github.event_name != 'pull_request' && !startsWith(github.ref, 'refs/tags/v')
+        uses: crazy-max/ghaction-virustotal@v5
+        with:
+          vt_api_key: ${{ secrets.VT_API_KEY }}
+          files: ${{ matrix.scan }}
+          # The free API allows 4 requests a minute, shared by all three jobs.
+          request_rate: 1
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.files }}
+          if-no-files-found: error
+      # The same files, handed to the release job for VirusTotal. Not
+      # published: the release itself carries the archives they came in.
+      - if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@v7
+        with:
+          name: scan-${{ matrix.artifact }}
+          path: ${{ matrix.scan }}
+          if-no-files-found: error
+          retention-days: 1
+
+  release:
+    name: Publish the release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: package
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      # Only for CHANGELOG.md, whose section for this version becomes the
+      # release notes.
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          sparse-checkout: CHANGELOG.md
+          sparse-checkout-cone-mode: false
+      # The lines under "## [1.1.0]" for the tag v1.1.0, up to the next
+      # "## [" heading. A tag with no section of its own, or an empty one,
+      # stops the release here rather than publishing it without notes.
+      - name: Take the release notes from CHANGELOG.md
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version="${TAG#v}"
+          awk -v heading="## [$version]" '
+            index($0, heading) == 1 { found = 1; next }
+            found && /^## \[/ { exit }
+            found { print }
+          ' CHANGELOG.md > "$RUNNER_TEMP/notes.md"
+          if ! grep -q '[^[:space:]]' "$RUNNER_TEMP/notes.md"; then
+            echo "::error file=CHANGELOG.md::No notes under '## [$version]'. Add that section, then tag again."
+            exit 1
+          fi
+          cat "$RUNNER_TEMP/notes.md"
+      - name: Download the packages
+        uses: actions/download-artifact@v8
+        with:
+          pattern: mainstone-*
+          path: dist
+          merge-multiple: true
+      - name: Download the files to scan
+        uses: actions/download-artifact@v8
+        with:
+          pattern: scan-mainstone-*
+          path: scan
+          merge-multiple: true
+      # The changelog's notes first; GitHub's own generated notes (the
+      # pull requests merged, and a link to compare with the last release)
+      # are added after them.
+      - name: Create the release
+        uses: softprops/action-gh-release@v3
+        with:
+          files: dist/*
+          body_path: ${{ runner.temp }}/notes.md
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+      # Once the release exists, submit its files to VirusTotal.
+      - name: Submit to VirusTotal
+        id: virustotal
+        uses: crazy-max/ghaction-virustotal@v5
+        with:
+          vt_api_key: ${{ secrets.VT_API_KEY }}
+          files: scan/*
+          request_rate: 4
+      # Then add a link to each report to the release notes. The action's
+      # own update_release_body only works for a run started by a release
+      # event, and this one is started by a tag, so it is done here from the
+      # action's output: "file=url,file=url,…".
+      - name: Link the VirusTotal reports from the release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+          ANALYSIS: ${{ steps.virustotal.outputs.analysis }}
+        run: |
+          {
+            gh release view "$TAG" --repo "$REPO" --json body --jq .body
+            printf '\n### VirusTotal\n\n'
+            IFS=',' read -ra entries <<< "$ANALYSIS"
+            for entry in "${entries[@]}"; do
+              # Split at the first "=": the report URLs end in base64 "==".
+              echo "- [$(basename "${entry%%=*}")](${entry#*=})"
+            done
+          } > "$RUNNER_TEMP/body.md"
+          cat "$RUNNER_TEMP/body.md"
+          gh release edit "$TAG" --repo "$REPO" --notes-file "$RUNNER_TEMP/body.md"
