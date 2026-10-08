@@ -405,10 +405,10 @@ You need a recent stable Rust toolchain (edition 2024).
 cargo run --release
 ```
 
-On Linux, install the window-system headers first:
+On Linux, install the window-system and ALSA headers first:
 
 ```sh
-sudo apt install build-essential pkg-config perl make \
+sudo apt install build-essential pkg-config perl make libasound2-dev \
     libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev \
     libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
 ```
@@ -474,4 +474,5 @@ cargo test
 ## Licence
 
 MIT. See [`LICENSE`](LICENSE). The bundled Ubuntu Bold font is under the
-[Ubuntu Font Licence](assets/fonts/UBUNTU-FONT-LICENCE-1.0.txt).
+[Ubuntu Font Licence](assets/fonts/UBUNTU-FONT-LICENCE-1.0.txt). The success
+and failure sounds are CC0; see [`assets/sounds/CREDITS.txt`](assets/sounds/CREDITS.txt).

@@ -50,6 +50,9 @@ mysql = { version = "28", default-features = false, features = ["minimal", "buff
 # on its own background thread.
 russh = { version = "0.64", default-features = false, features = ["ring", "rsa", "flate2"] }
 tokio = { version = "1", features = ["rt", "net", "time"] }
+# The success and failure sounds, as in speechout. Needs ALSA's headers on
+# Linux (libasound2-dev).
+rodio = { version = "0.22", default-features = false, features = ["playback", "mp3", "wav", "symphonia-mp3", "symphonia-wav"] }
 
 [profile.release]
 opt-level = 2

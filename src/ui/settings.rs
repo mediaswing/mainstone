@@ -1,5 +1,5 @@
-//! The Settings pane: light, dark, or follow the system, updates, and the
-//! debug log.
+//! The Settings pane: light, dark, or follow the system, sounds, updates,
+//! and the debug log.
 
 use egui::{RichText, Ui};
 
@@ -8,7 +8,7 @@ use crate::config::Appearance;
 use crate::ui;
 
 pub fn show(app: &mut App, ui: &mut Ui) {
-    ui::pane_header(ui, "Settings", "How the app looks, updates, and a log for when something goes wrong.");
+    ui::pane_header(ui, "Settings", "How the app looks and sounds, updates, and a log for when something goes wrong.");
 
     egui::ScrollArea::vertical().show(ui, |ui| {
         ui.set_max_width(640.0);
@@ -32,6 +32,20 @@ pub fn show(app: &mut App, ui: &mut Ui) {
             ui.add_space(8.0);
         }
         ui.add_space(8.0);
+        ui.label(RichText::new("Sounds").strong());
+        ui.add_space(6.0);
+        if ui
+            .checkbox(&mut app.config.sounds, "Play sounds")
+            .changed()
+        {
+            changed = true;
+        }
+        ui.label(
+            RichText::new("A sound when an action works and another when it fails, alongside the message in the status bar.")
+                .size(12.0)
+                .weak(),
+        );
+        ui.add_space(16.0);
         ui.label(RichText::new("Troubleshooting").strong());
         ui.add_space(6.0);
         let forced = crate::logging::forced_by_environment();

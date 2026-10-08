@@ -26,9 +26,10 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  # The window-system headers winit needs on Linux, and dpkg-dev for the .deb.
+  # The window-system headers winit needs on Linux, ALSA's for the sounds,
+  # and dpkg-dev for the .deb.
   LINUX_PACKAGES: >-
-    build-essential pkg-config perl make dpkg-dev
+    build-essential pkg-config perl make dpkg-dev libasound2-dev
     libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev
     libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
 

@@ -81,6 +81,7 @@ pub struct App {
     pub servers: ui::servers::State,
     pub export: ui::export::State,
     pub update: ui::update::State,
+    cues: crate::sound::Cues,
 }
 
 impl App {
@@ -113,6 +114,7 @@ impl App {
             servers: ui::servers::State::from_config(&config),
             export: ui::export::State::from_config(&config),
             update: ui::update::State::default(),
+            cues: crate::sound::Cues::default(),
             config,
         };
         // A remembered secret means the user asked to be signed in without
@@ -140,6 +142,7 @@ impl App {
     pub fn report_ok(&mut self, message: impl Into<String>) {
         let message = message.into();
         log::info!("{message}");
+        self.cue(crate::sound::Cue::Success);
         self.status = Some(Status {
             message,
             good: true,
@@ -149,10 +152,18 @@ impl App {
     pub fn report_error(&mut self, message: impl Into<String>) {
         let message = message.into();
         log::warn!("{message}");
+        self.cue(crate::sound::Cue::Failure);
         self.status = Some(Status {
             message,
             good: false,
         });
+    }
+
+    /// Play the success or failure sound, unless sounds are switched off.
+    fn cue(&self, cue: crate::sound::Cue) {
+        if self.config.sounds {
+            self.cues.play(cue);
+        }
     }
 
     /// Show `message` in an information box until the user dismisses it.

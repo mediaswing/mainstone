@@ -1,6 +1,6 @@
 //! What the app remembers between runs: which tenant and app registration to
 //! sign in as, where the MariaDB server is, the last server snapshotted over
-//! SSH, and light or dark.
+//! SSH, light or dark, and whether to play sounds.
 //!
 //! Neither secret is in here. The client secret and the MariaDB password go in
 //! a separate read-only file in the home directory (see [`crate::secrets`]),
@@ -62,6 +62,9 @@ pub struct Config {
     pub check_for_updates: bool,
     /// A version the user chose to skip, so it is not offered again.
     pub skipped_update: Option<String>,
+    /// Play the success and failure sounds; see [`crate::sound`]. On unless
+    /// switched off.
+    pub sounds: bool,
 }
 
 impl Default for Config {
@@ -75,6 +78,7 @@ impl Default for Config {
             debug_logging: true,
             check_for_updates: true,
             skipped_update: None,
+            sounds: true,
         }
     }
 }

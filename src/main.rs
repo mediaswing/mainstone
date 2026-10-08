@@ -11,6 +11,7 @@ mod graph;
 mod logging;
 mod secrets;
 mod servers;
+mod sound;
 mod task;
 mod theme;
 mod ui;

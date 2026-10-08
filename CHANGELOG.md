@@ -1,5 +1,13 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- A sound when an action works and another when it fails, alongside the
+  message in the status bar. The sounds are the same as speechout's, and
+  **Settings → Sounds** turns them off.
+
 ## [1.6.0]
 
 ### Added
