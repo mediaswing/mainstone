@@ -1,6 +1,6 @@
 [package]
 name = "mainstone"
-version = "1.6.0"
+version = "1.8.0"
 edition = "2024"
 description = "Mainstone Cloud System: users, groups and devices in Microsoft Entra ID and Intune, with CSV import and export and a copy to MariaDB"
 license = "MIT"
