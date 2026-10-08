@@ -13,6 +13,7 @@ use crate::graph::licensing::{Holders, Sku};
 use crate::graph::{Graph, Result};
 use crate::task::{Task, take_finished};
 use crate::ui;
+use crate::ui::shortcuts::{self, Command};
 
 #[derive(Default)]
 pub struct State {
@@ -80,6 +81,27 @@ pub fn ensure_loaded(app: &mut App, ctx: &egui::Context) {
     app.licensing.load = Some(Task::spawn(ctx, "Loading subscriptions…", move || {
         graph.list_skus()
     }));
+}
+
+/// The keyboard shortcuts' commands; see [`shortcuts`].
+pub fn command(app: &mut App, ctx: &egui::Context, command: Command) -> bool {
+    if app.graph.is_none() {
+        return false;
+    }
+    match command {
+        Command::Find => ui::request_find(ctx),
+        Command::Refresh => {
+            if app.licensing.load.is_none() {
+                app.licensing.invalidate();
+            }
+        }
+        Command::Deselect => {
+            app.licensing.assign_to.clear();
+            return app.licensing.selected.take().is_some();
+        }
+        Command::New | Command::Delete => return false,
+    }
+    true
 }
 
 fn run(
@@ -160,7 +182,10 @@ pub fn show(app: &mut App, ui: &mut Ui) {
     ui::pane_header(ui, "Licensing", &subtitle);
 
     ui.horizontal(|ui| {
-        if ui::tool_button(ui, app.licensing.load.is_none(), "Refresh").clicked() {
+        if ui::tool_button(ui, app.licensing.load.is_none(), "Refresh")
+            .on_hover_text(ui::shortcut_hint(ui, "Read the subscriptions again", &shortcuts::REFRESH))
+            .clicked()
+        {
             app.licensing.invalidate();
         }
     });
@@ -192,7 +217,7 @@ pub fn show(app: &mut App, ui: &mut Ui) {
         .as_deref()
         .and_then(|id| shown.iter().position(|&i| app.licensing.skus[i].sku_id == id));
     let skus = &app.licensing.skus;
-    let clicked = ui::select_table(
+    let clicks = ui::select_table(
         ui,
         "skus",
         &[
@@ -221,8 +246,14 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                 _ => status_label(ui, s),
             }
         },
+        Some(&mut |row, ui| {
+            let s = &skus[shown[row]];
+            ui::copy_item(ui, "product name", s.name());
+            ui::copy_item(ui, "part number", &s.sku_part_number);
+            ui::copy_item(ui, "SKU ID", &s.sku_id);
+        }),
     );
-    if let Some(row) = clicked {
+    if let Some(row) = clicks.clicked {
         let id = app.licensing.skus[shown[row]].sku_id.clone();
         app.licensing.selected = if app.licensing.selected.as_deref() == Some(&id) {
             None
@@ -230,6 +261,13 @@ pub fn show(app: &mut App, ui: &mut Ui) {
             Some(id)
         };
         app.licensing.assign_to.clear();
+    }
+    if let Some(row) = clicks.right_clicked {
+        let id = app.licensing.skus[shown[row]].sku_id.clone();
+        if app.licensing.selected.as_deref() != Some(&id) {
+            app.licensing.selected = Some(id);
+            app.licensing.assign_to.clear();
+        }
     }
 }
 
@@ -308,7 +346,7 @@ fn details(app: &mut App, ui: &mut Ui, ctx: &egui::Context) {
                     .hint_text("user@contoso.com")
                     .desired_width(ui.available_width() - 80.0);
                 let response = ui::named(ui.add(field), "Sign-in name of the user to assign to");
-                let enter = response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                let enter = ui::submitted(&response);
                 let can = idle && sku.available() > 0 && !app.licensing.assign_to.trim().is_empty();
                 let clicked = ui::tool_button(ui, can, "Assign").clicked();
                 if clicked || (enter && can) {
@@ -358,25 +396,30 @@ fn details(app: &mut App, ui: &mut Ui, ctx: &egui::Context) {
 
 fn holders_list(app: &mut App, ui: &mut Ui, sku: &Sku, idle: bool) {
     let mut remove = None;
+    let mut show_user = None;
     match &app.licensing.holders {
         Some((id, Ok(holders))) if *id == sku.sku_id => {
             if holders.users.is_empty() {
                 ui.label(RichText::new("Nobody.").weak());
             }
             for user in &holders.users {
-                ui.horizontal(|ui| {
-                    if user.holds_directly(&sku.sku_id) {
+                let removable = user.holds_directly(&sku.sku_id);
+                let removal = || {
+                    (
+                        user.id.clone(),
+                        user.upn().to_owned(),
+                        sku.sku_id.clone(),
+                        sku.name().to_owned(),
+                    )
+                };
+                let row = ui::menu_row(ui, |ui| {
+                    if removable {
                         let label = format!("Remove {} from {}", user.name(), sku.name());
                         if ui::named(ui.add_enabled(idle, egui::Button::new("✕").small()), &label)
                             .on_hover_text(&label)
                             .clicked()
                         {
-                            remove = Some((
-                                user.id.clone(),
-                                user.upn().to_owned(),
-                                sku.sku_id.clone(),
-                                sku.name().to_owned(),
-                            ));
+                            remove = Some(removal());
                         }
                     } else {
                         // Keeps the names lined up with the removable ones.
@@ -401,6 +444,18 @@ fn holders_list(app: &mut App, ui: &mut Ui, sku: &Sku, idle: bool) {
                         }
                     });
                 });
+                row.response.context_menu(|ui| {
+                    if ui.button("Show in Users").clicked() {
+                        show_user = Some(user.id.clone());
+                    }
+                    ui::copy_item(ui, "name", user.display_name.as_deref().unwrap_or(""));
+                    ui::copy_item(ui, "sign-in name", user.upn());
+                    ui.separator();
+                    // A licence held through a group is removed from the group.
+                    if ui.add_enabled(idle && removable, egui::Button::new("Remove licence")).clicked() {
+                        remove = Some(removal());
+                    }
+                });
             }
         }
         Some((id, Err(err))) if *id == sku.sku_id => ui::error_text(ui, err),
@@ -408,6 +463,9 @@ fn holders_list(app: &mut App, ui: &mut Ui, sku: &Sku, idle: bool) {
     }
     if remove.is_some() {
         app.licensing.confirm_remove = remove;
+    }
+    if let Some(id) = show_user {
+        ui::users::show_user(app, &id);
     }
 }
 

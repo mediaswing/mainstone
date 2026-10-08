@@ -15,6 +15,7 @@ use crate::config::Config;
 use crate::servers::{Auth, Failure, ServerSettings, Snapshot, Target};
 use crate::task::{Task, take_finished};
 use crate::ui;
+use crate::ui::shortcuts::{self, Command};
 
 pub struct State {
     settings: ServerSettings,
@@ -105,6 +106,31 @@ fn target_of(state: &State) -> Result<Target, String> {
     })
 }
 
+/// The keyboard shortcuts' commands; see [`shortcuts`]. Refresh takes the
+/// snapshot again, as the button does.
+pub fn command(app: &mut App, ctx: &egui::Context, command: Command) -> bool {
+    match command {
+        Command::Find if app.servers.selected.is_some() => ui::request_find(ctx),
+        Command::Refresh => take_snapshot(app, ctx),
+        _ => return false,
+    }
+    true
+}
+
+/// Take a snapshot of the server in the form, or say what is missing.
+fn take_snapshot(app: &mut App, ctx: &egui::Context) {
+    if app.servers.take.is_some() {
+        return;
+    }
+    match target_of(&app.servers) {
+        Ok(target) => start(app, ctx, target),
+        Err(err) => {
+            app.servers.error = Some(err.clone());
+            app.report_error(err);
+        }
+    }
+}
+
 fn start(app: &mut App, ctx: &egui::Context, target: Target) {
     app.servers.error = None;
     app.servers.in_flight = Some(target.clone());
@@ -179,13 +205,15 @@ pub fn show(app: &mut App, ui: &mut Ui) {
 fn form(app: &mut App, ui: &mut Ui, ctx: &egui::Context) {
     let busy = app.servers.take.is_some();
     let mut go = false;
+    let mut forget = None;
     egui::ScrollArea::vertical().show(ui, |ui| {
         ui.add_space(4.0);
         let state = &mut app.servers;
         let s = &mut state.settings;
-        ui::labelled_field(ui, "Host", &mut s.host, "server.example.com or 192.0.2.10");
-        ui::labelled_field(ui, "Port", &mut state.port, "22");
-        ui::labelled_field(ui, "User", &mut s.user, "ubuntu");
+        // Enter in any box of the form takes the snapshot.
+        let mut enter = ui::submitted(&ui::labelled_field(ui, "Host", &mut s.host, "server.example.com or 192.0.2.10"));
+        enter |= ui::submitted(&ui::labelled_field(ui, "Port", &mut state.port, "22"));
+        enter |= ui::submitted(&ui::labelled_field(ui, "User", &mut s.user, "ubuntu"));
 
         ui.label(RichText::new("Sign in with").size(13.0));
         ui.horizontal(|ui| {
@@ -194,7 +222,7 @@ fn form(app: &mut App, ui: &mut Ui, ctx: &egui::Context) {
         });
         ui.add_space(6.0);
         if s.use_key {
-            ui::labelled_field(ui, "Private key file", &mut s.key_path, "~/.ssh/id_ed25519");
+            enter |= ui::submitted(&ui::labelled_field(ui, "Private key file", &mut s.key_path, "~/.ssh/id_ed25519"));
             if ui.button("Browse…").clicked() {
                 let mut dialog = rfd::FileDialog::new();
                 if let Some(ssh) = dirs::home_dir().map(|h| h.join(".ssh")).filter(|d| d.is_dir()) {
@@ -205,9 +233,9 @@ fn form(app: &mut App, ui: &mut Ui, ctx: &egui::Context) {
                 }
             }
             ui.add_space(6.0);
-            ui::labelled_password(ui, "Passphrase, if the key has one", &mut state.passphrase);
+            enter |= ui::submitted(&ui::labelled_password(ui, "Passphrase, if the key has one", &mut state.passphrase));
         } else {
-            ui::labelled_password(ui, "Password", &mut state.password);
+            enter |= ui::submitted(&ui::labelled_password(ui, "Password", &mut state.password));
         }
         ui.label(
             RichText::new(
@@ -218,10 +246,11 @@ fn form(app: &mut App, ui: &mut Ui, ctx: &egui::Context) {
         );
         ui.add_space(8.0);
         let label = if busy { "Connecting…" } else { "Take snapshot" };
-        go = ui
+        let button = ui
             .add_enabled_ui(!busy, |ui| ui::wide_button(ui, label))
             .inner
-            .clicked();
+            .on_hover_text(ui::shortcut_hint(ui, "Connect and read the server", &shortcuts::REFRESH));
+        go = button.clicked() || (enter && !busy);
         if let Some(err) = &state.error {
             ui.add_space(6.0);
             ui::error_text(ui, err);
@@ -246,21 +275,33 @@ fn form(app: &mut App, ui: &mut Ui, ctx: &egui::Context) {
                 let button = egui::Button::selectable(state.selected == Some(i), text)
                     .corner_radius(6.0)
                     .min_size(egui::vec2(ui.available_width(), 0.0));
-                if ui.add(button).clicked() {
+                let response = ui.add(button);
+                if response.clicked() || response.secondary_clicked() {
                     state.selected = Some(i);
                 }
+                response.context_menu(|ui| {
+                    ui::copy_item(ui, "host name", &snapshot.hostname);
+                    ui::copy_item(ui, "address", &snapshot.address);
+                    ui.separator();
+                    if ui.button("Remove from the list").clicked() {
+                        forget = Some(i);
+                    }
+                });
             }
         }
     });
 
+    if let Some(i) = forget {
+        let state = &mut app.servers;
+        state.snapshots.remove(i);
+        state.selected = match state.selected {
+            Some(s) if s == i => None,
+            Some(s) if s > i => Some(s - 1),
+            other => other,
+        };
+    }
     if go {
-        match target_of(&app.servers) {
-            Ok(target) => start(app, ctx, target),
-            Err(err) => {
-                app.servers.error = Some(err.clone());
-                app.report_error(err);
-            }
-        }
+        take_snapshot(app, ctx);
     }
 }
 
@@ -387,6 +428,13 @@ fn details(app: &mut App, ui: &mut Ui) {
                 }
             }
         },
+        Some(&mut |row, ui| {
+            let package = &snapshot.packages[shown[row]];
+            let upgrade = snapshot.upgrade_for(&package.name);
+            ui::copy_item(ui, "package name", &package.name);
+            ui::copy_item(ui, "installed version", &package.version);
+            ui::copy_item(ui, "update's version", upgrade.map_or("", |u| u.available.as_str()));
+        }),
     );
 
     let snapshot = snapshot.clone();

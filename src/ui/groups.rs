@@ -9,6 +9,7 @@ use crate::graph::models::{DirectoryObject, Group};
 use crate::graph::{Graph, Result};
 use crate::task::{Task, take_finished};
 use crate::ui;
+use crate::ui::shortcuts::{self, Command};
 
 enum Change {
     Created(Group),
@@ -68,6 +69,55 @@ impl State {
     fn selected_group(&self) -> Option<&Group> {
         let id = self.selected.as_deref()?;
         self.groups.iter().find(|g| g.id == id)
+    }
+}
+
+/// The keyboard shortcuts' commands; see [`shortcuts`].
+pub fn command(app: &mut App, ctx: &egui::Context, command: Command) -> bool {
+    if app.graph.is_none() {
+        return false;
+    }
+    match command {
+        Command::Find => ui::request_find(ctx),
+        Command::Refresh => refresh(app),
+        Command::New => new_group(app),
+        Command::Delete => {
+            let Some(group) = app.groups.selected_group() else { return false };
+            let pending = (group.id.clone(), group.name().to_owned());
+            ask_delete(app, pending);
+        }
+        Command::Deselect => {
+            app.groups.new_member.clear();
+            return app.groups.selected.take().is_some();
+        }
+    }
+    true
+}
+
+/// Show one group on this tab, from a user's memberships.
+pub fn show_group(app: &mut App, id: &str) {
+    app.groups.selected = Some(id.to_owned());
+    app.groups.query.clear();
+    app.groups.new_member.clear();
+    app.tab = Tab::Groups;
+}
+
+fn refresh(app: &mut App) {
+    if app.groups.load.is_none() {
+        app.groups.loaded = false;
+        app.groups.members = None;
+    }
+}
+
+fn new_group(app: &mut App) {
+    if app.groups.action.is_none() {
+        app.groups.form = Some((NewGroup::default(), None));
+    }
+}
+
+fn ask_delete(app: &mut App, group: (String, String)) {
+    if app.groups.action.is_none() {
+        app.groups.confirm_delete = Some(group);
     }
 }
 
@@ -177,12 +227,17 @@ pub fn show(app: &mut App, ui: &mut Ui) {
     ui::pane_header(ui, "Groups", &subtitle);
 
     ui.horizontal(|ui| {
-        if ui::tool_button(ui, app.groups.load.is_none(), "Refresh").clicked() {
-            app.groups.loaded = false;
-            app.groups.members = None;
+        if ui::tool_button(ui, app.groups.load.is_none(), "Refresh")
+            .on_hover_text(ui::shortcut_hint(ui, "Read the groups again", &shortcuts::REFRESH))
+            .clicked()
+        {
+            refresh(app);
         }
-        if ui::tool_button(ui, app.groups.action.is_none(), "+ New group").clicked() {
-            app.groups.form = Some((NewGroup::default(), None));
+        if ui::tool_button(ui, app.groups.action.is_none(), "+ New group")
+            .on_hover_text(ui::shortcut_hint(ui, "Create a group", &shortcuts::NEW))
+            .clicked()
+        {
+            new_group(app);
         }
     });
     ui.add_space(4.0);
@@ -206,7 +261,9 @@ pub fn show(app: &mut App, ui: &mut Ui) {
         .as_deref()
         .and_then(|id| shown.iter().position(|&i| app.groups.groups[i].id == id));
     let groups = &app.groups.groups;
-    let clicked = ui::select_table(
+    let idle = app.groups.action.is_none();
+    let mut delete = None;
+    let clicks = ui::select_table(
         ui,
         "groups",
         &[
@@ -226,8 +283,18 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                 _ => ui::cell_text(ui, g.mail.as_deref().unwrap_or("")),
             }
         },
+        Some(&mut |row, ui| {
+            let g = &groups[shown[row]];
+            ui::copy_item(ui, "name", g.display_name.as_deref().unwrap_or(""));
+            ui::copy_item(ui, "mail address", g.mail.as_deref().unwrap_or(""));
+            ui::copy_item(ui, "object ID", &g.id);
+            ui.separator();
+            if ui::menu_item(ui, idle, "Delete group", &shortcuts::DELETE) {
+                delete = Some((g.id.clone(), g.name().to_owned()));
+            }
+        }),
     );
-    if let Some(row) = clicked {
+    if let Some(row) = clicks.clicked {
         let id = app.groups.groups[shown[row]].id.clone();
         app.groups.selected = if app.groups.selected.as_deref() == Some(&id) {
             None
@@ -235,6 +302,16 @@ pub fn show(app: &mut App, ui: &mut Ui) {
             Some(id)
         };
         app.groups.new_member.clear();
+    }
+    if let Some(row) = clicks.right_clicked {
+        let id = app.groups.groups[shown[row]].id.clone();
+        if app.groups.selected.as_deref() != Some(&id) {
+            app.groups.selected = Some(id);
+            app.groups.new_member.clear();
+        }
+    }
+    if let Some(group) = delete {
+        ask_delete(app, group);
     }
 }
 
@@ -252,8 +329,11 @@ fn details(app: &mut App, ui: &mut Ui, ctx: &egui::Context) {
         ui.add_space(8.0);
         ui.heading(group.name());
         ui.add_space(6.0);
-        if ui::tool_button(ui, idle, "Delete group").clicked() {
-            app.groups.confirm_delete = Some((group.id.clone(), group.name().to_owned()));
+        if ui::tool_button(ui, idle, "Delete group")
+            .on_hover_text(ui::shortcut_hint(ui, "Delete this group", &shortcuts::DELETE))
+            .clicked()
+        {
+            ask_delete(app, (group.id.clone(), group.name().to_owned()));
         }
         ui.add_space(8.0);
 
@@ -280,7 +360,7 @@ fn details(app: &mut App, ui: &mut Ui, ctx: &egui::Context) {
                     .hint_text("user@contoso.com")
                     .desired_width(ui.available_width() - 70.0);
                 let response = ui::named(ui.add(field), "Sign-in name of the user to add");
-                let enter = response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                let enter = ui::submitted(&response);
                 let can_add = idle && !app.groups.new_member.trim().is_empty();
                 let clicked = ui::tool_button(ui, can_add, "Add").clicked();
                 if clicked || (enter && can_add) {
@@ -297,6 +377,7 @@ fn details(app: &mut App, ui: &mut Ui, ctx: &egui::Context) {
         }
         ui.add_space(4.0);
 
+        let mut show_user = None;
         match &app.groups.members {
             Some((id, Ok(members))) if *id == group.id => {
                 if members.is_empty() {
@@ -304,7 +385,7 @@ fn details(app: &mut App, ui: &mut Ui, ctx: &egui::Context) {
                 }
                 ui.label(RichText::new(format!("{} members", members.len())).size(12.0).weak());
                 for m in members {
-                    ui.horizontal(|ui| {
+                    let row = ui::menu_row(ui, |ui| {
                         let remove = format!("Remove {} from the group", m.name());
                         if !group.is_dynamic()
                             && ui::named(
@@ -330,10 +411,32 @@ fn details(app: &mut App, ui: &mut Ui, ctx: &egui::Context) {
                             ui.label(RichText::new(detail).size(12.0).weak());
                         });
                     });
+                    row.response.context_menu(|ui| {
+                        if m.kind() == "user" && ui.button("Show in Users").clicked() {
+                            show_user = Some(m.id.clone());
+                        }
+                        ui::copy_item(ui, "name", m.display_name.as_deref().unwrap_or(""));
+                        ui::copy_item(ui, "sign-in name", m.user_principal_name.as_deref().unwrap_or(""));
+                        ui::copy_item(ui, "mail address", m.mail.as_deref().unwrap_or(""));
+                        ui::copy_item(ui, "object ID", &m.id);
+                        if !group.is_dynamic() {
+                            ui.separator();
+                            if ui.add_enabled(idle, egui::Button::new("Remove from group")).clicked() {
+                                app.groups.confirm_remove = Some((
+                                    group.id.clone(),
+                                    m.id.clone(),
+                                    format!("{} from {}", m.name(), group.name()),
+                                ));
+                            }
+                        }
+                    });
                 }
             }
             Some((id, Err(err))) if *id == group.id => ui::error_text(ui, err),
             _ => ui::busy(ui, "Loading…"),
+        }
+        if let Some(id) = show_user {
+            ui::users::show_user(app, &id);
         }
     });
 }
@@ -397,12 +500,22 @@ fn form_modal(app: &mut App, ctx: &egui::Context) {
         ui.add_space(6.0);
         let first = ui::labelled_field(ui, "Name", &mut group.display_name, "");
         ui::focus_on_open(ui, egui::Id::new("group-form"), &first);
-        ui::labelled_field(ui, "Mail nickname (optional)", &mut group.mail_nickname, "from the name");
-        ui::labelled_field(ui, "Description (optional)", &mut group.description, "");
+        let mut enter = ui::submitted(&first);
+        enter |= ui::submitted(&ui::labelled_field(
+            ui,
+            "Mail nickname (optional)",
+            &mut group.mail_nickname,
+            "from the name",
+        ));
+        enter |= ui::submitted(&ui::labelled_field(ui, "Description (optional)", &mut group.description, ""));
         if let Some(err) = error.as_ref() {
             ui::error_text(ui, err);
         }
-        answer = ui::form_buttons(ui, "Create", !group.display_name.trim().is_empty());
+        let can_create = !group.display_name.trim().is_empty();
+        answer = ui::form_buttons(ui, "Create", can_create);
+        if enter && can_create && answer.is_none() {
+            answer = Some(true);
+        }
     });
     if modal.should_close() && answer.is_none() {
         answer = Some(false);

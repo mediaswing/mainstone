@@ -23,7 +23,7 @@ pub enum Tab {
 }
 
 impl Tab {
-    const ALL: [Self; 9] = [
+    pub const ALL: [Self; 9] = [
         Self::Connection,
         Self::Users,
         Self::Groups,
@@ -273,6 +273,7 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         crate::theme::apply_appearance(&ctx, self.config.appearance);
+        ui::shortcuts::handle(self, &ctx);
 
         // Answers are collected whichever tab is showing, so a load started on
         // one tab is not lost by moving to another.
@@ -315,5 +316,10 @@ impl eframe::App for App {
         ui::licensing::modals(self, &ctx);
         ui::servers::modals(self, &ctx);
         self.notice_modal(&ctx);
+
+        // Anything copied from a right-click menu this frame.
+        if let Some(message) = ui::take_copied(&ctx) {
+            self.report_ok(message);
+        }
     }
 }

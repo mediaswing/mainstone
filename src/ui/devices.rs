@@ -10,6 +10,7 @@ use crate::graph::models::{DeviceRow, short_time};
 use crate::graph::{Graph, Result};
 use crate::task::{Task, take_finished};
 use crate::ui;
+use crate::ui::shortcuts::{self, Command};
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
 enum Filter {
@@ -83,6 +84,37 @@ enum Pending {
     },
 }
 
+/// What can be done to one device, from the buttons in the details panel or
+/// the row's right-click menu.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Action {
+    Intune(IntuneAction),
+    ToggleEntra,
+    DeleteEntra,
+}
+
+/// The actions that apply to a device, in the order they are offered: the
+/// Intune ones first, as the details panel shows them.
+fn actions(row: &DeviceRow) -> Vec<Action> {
+    let mut actions = Vec::new();
+    if let Some(i) = &row.intune {
+        actions.extend(IntuneAction::ALL.into_iter().filter(|a| a.applies_to(i)).map(Action::Intune));
+    }
+    if row.entra.is_some() {
+        actions.extend([Action::ToggleEntra, Action::DeleteEntra]);
+    }
+    actions
+}
+
+fn label(row: &DeviceRow, action: Action) -> &'static str {
+    match action {
+        Action::Intune(a) => a.label(),
+        Action::ToggleEntra if row.entra.as_ref().is_some_and(|e| e.account_enabled == Some(false)) => "Enable",
+        Action::ToggleEntra => "Disable",
+        Action::DeleteEntra => "Delete from Entra ID",
+    }
+}
+
 #[derive(Default)]
 pub struct State {
     rows: Vec<DeviceRow>,
@@ -126,6 +158,64 @@ impl State {
     fn selected_row(&self) -> Option<&DeviceRow> {
         let key = self.selected.as_ref()?;
         self.rows.iter().find(|r| key_of(r) == *key)
+    }
+}
+
+/// The keyboard shortcuts' commands; see [`shortcuts`]. A device has two
+/// kinds of delete, so Delete is left to the buttons, which say which.
+pub fn command(app: &mut App, ctx: &egui::Context, command: Command) -> bool {
+    if app.graph.is_none() {
+        return false;
+    }
+    match command {
+        Command::Find => ui::request_find(ctx),
+        Command::Refresh => {
+            if app.devices.load.is_none() {
+                app.devices.loaded = false;
+            }
+        }
+        Command::Deselect => return app.devices.selected.take().is_some(),
+        Command::New | Command::Delete => return false,
+    }
+    true
+}
+
+fn perform(app: &mut App, ctx: &egui::Context, row: &DeviceRow, action: Action) {
+    if app.devices.action.is_some() {
+        return;
+    }
+    match action {
+        Action::Intune(action) => {
+            let Some(i) = &row.intune else { return };
+            let pending = Pending::Intune {
+                id: i.id.clone(),
+                name: row.name().to_owned(),
+                action,
+            };
+            if action.is_drastic() {
+                app.devices.confirm = Some(pending);
+            } else {
+                start(app, ctx, pending);
+            }
+        }
+        Action::ToggleEntra => {
+            let Some(e) = &row.entra else { return };
+            let enabled = e.account_enabled != Some(false);
+            let id = e.id.clone();
+            let name = row.name().to_owned();
+            run(app, ctx, "Updating device…", move |g| {
+                g.set_device_enabled(&id, !enabled)?;
+                let verb = if enabled { "disabled" } else { "enabled" };
+                Ok((format!("{name} {verb} in Entra ID."), Change::EntraEnabled(id, !enabled)))
+            });
+        }
+        Action::DeleteEntra => {
+            let Some(e) = &row.entra else { return };
+            app.devices.confirm = Some(Pending::DeleteEntra {
+                id: e.id.clone(),
+                name: row.name().to_owned(),
+            });
+        }
     }
 }
 
@@ -239,7 +329,10 @@ pub fn show(app: &mut App, ui: &mut Ui) {
     ui::pane_header(ui, "Devices", &subtitle);
 
     ui.horizontal(|ui| {
-        if ui::tool_button(ui, app.devices.load.is_none(), "Refresh").clicked() {
+        if ui::tool_button(ui, app.devices.load.is_none(), "Refresh")
+            .on_hover_text(ui::shortcut_hint(ui, "Read the devices again", &shortcuts::REFRESH))
+            .clicked()
+        {
             app.devices.loaded = false;
         }
         ui.separator();
@@ -275,7 +368,9 @@ pub fn show(app: &mut App, ui: &mut Ui) {
             .position(|&i| key_of(&app.devices.rows[i]) == *key)
     });
     let rows = &app.devices.rows;
-    let clicked = ui::select_table(
+    let idle = app.devices.action.is_none();
+    let mut chosen = None;
+    let clicks = ui::select_table(
         ui,
         "devices",
         &[
@@ -299,14 +394,53 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                 _ => ui::cell_text(ui, &short_time(r.last_seen())),
             }
         },
+        Some(&mut |row, ui| {
+            let r = &rows[shown[row]];
+            let actions = actions(r);
+            let mut entra_started = false;
+            for action in &actions {
+                // The Entra actions under a line of their own, as in the
+                // details panel.
+                if !matches!(action, Action::Intune(_)) && !entra_started {
+                    entra_started = true;
+                    if actions.iter().any(|a| matches!(a, Action::Intune(_))) {
+                        ui.separator();
+                    }
+                }
+                let mut button = ui.add_enabled(idle, egui::Button::new(label(r, *action)));
+                if let Action::Intune(a) = action {
+                    button = button.on_hover_text(a.explanation());
+                }
+                if button.clicked() {
+                    chosen = Some((*action, key_of(r)));
+                }
+            }
+            if !actions.is_empty() {
+                ui.separator();
+            }
+            let serial = r.intune.as_ref().and_then(|i| i.serial_number.as_deref()).unwrap_or("");
+            ui::copy_item(ui, "name", r.name());
+            ui::copy_item(ui, "primary user", r.user());
+            ui::copy_item(ui, "serial number", serial);
+            ui::copy_item(ui, "Entra object ID", r.entra.as_ref().map_or("", |e| e.id.as_str()));
+            ui::copy_item(ui, "Intune device ID", r.intune.as_ref().map_or("", |i| i.id.as_str()));
+        }),
     );
-    if let Some(row) = clicked {
+    if let Some(row) = clicks.clicked {
         let key = key_of(&app.devices.rows[shown[row]]);
         app.devices.selected = if app.devices.selected.as_ref() == Some(&key) {
             None
         } else {
             Some(key)
         };
+    }
+    if let Some(row) = clicks.right_clicked {
+        app.devices.selected = Some(key_of(&app.devices.rows[shown[row]]));
+    }
+    if let Some((action, key)) = chosen
+        && let Some(row) = app.devices.rows.iter().find(|r| key_of(r) == key).cloned()
+    {
+        perform(app, &ctx, &row, action);
     }
 }
 
@@ -327,6 +461,7 @@ fn details(app: &mut App, ui: &mut Ui, ctx: &egui::Context) {
         return;
     };
     let idle = app.devices.action.is_none();
+    let mut chosen = None;
 
     egui::ScrollArea::vertical().show(ui, |ui| {
         ui.add_space(8.0);
@@ -347,16 +482,7 @@ fn details(app: &mut App, ui: &mut Ui, ctx: &egui::Context) {
                         .on_hover_text(action.explanation())
                         .clicked()
                     {
-                        let pending = Pending::Intune {
-                            id: i.id.clone(),
-                            name: row.name().to_owned(),
-                            action,
-                        };
-                        if action.is_drastic() {
-                            app.devices.confirm = Some(pending);
-                        } else {
-                            start(app, ctx, pending);
-                        }
+                        chosen = Some(Action::Intune(action));
                     }
                 }
             });
@@ -385,20 +511,10 @@ fn details(app: &mut App, ui: &mut Ui, ctx: &egui::Context) {
             ui.add_space(4.0);
             let enabled = e.account_enabled != Some(false);
             ui.horizontal_wrapped(|ui| {
-                if ui::tool_button(ui, idle, if enabled { "Disable" } else { "Enable" }).clicked() {
-                    let id = e.id.clone();
-                    let name = row.name().to_owned();
-                    run(app, ctx, "Updating device…", move |g| {
-                        g.set_device_enabled(&id, !enabled)?;
-                        let verb = if enabled { "disabled" } else { "enabled" };
-                        Ok((format!("{name} {verb} in Entra ID."), Change::EntraEnabled(id, !enabled)))
-                    });
-                }
-                if ui::tool_button(ui, idle, "Delete from Entra ID").clicked() {
-                    app.devices.confirm = Some(Pending::DeleteEntra {
-                        id: e.id.clone(),
-                        name: row.name().to_owned(),
-                    });
+                for action in [Action::ToggleEntra, Action::DeleteEntra] {
+                    if ui::tool_button(ui, idle, label(&row, action)).clicked() {
+                        chosen = Some(action);
+                    }
                 }
             });
             ui.add_space(6.0);
@@ -423,6 +539,9 @@ fn details(app: &mut App, ui: &mut Ui, ctx: &egui::Context) {
             ui::property(ui, "Object ID", &e.id);
         }
     });
+    if let Some(action) = chosen {
+        perform(app, ctx, &row, action);
+    }
 }
 
 /// Entra's join types, in the words the admin centre uses.

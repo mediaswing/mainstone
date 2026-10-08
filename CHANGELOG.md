@@ -7,6 +7,21 @@
 - A sound when an action works and another when it fails, alongside the
   message in the status bar. The sounds are the same as speechout's, and
   **Settings → Sounds** turns them off.
+- Keyboard shortcuts: ⌘1–⌘9 (Ctrl on Windows and Linux) for the tabs,
+  Ctrl+Tab and Ctrl+Shift+Tab, ⌘, for Settings, ⌘F to search, ⌘R or F5 to
+  refresh, ⌘N for a new user or group, Delete for the selected user or group,
+  and Escape to clear the selection. They are listed in **Settings**, and on
+  the buttons' tooltips.
+- Right-click menus on every list's rows, on group members, licence holders
+  and a user's groups, and on every value in a details panel: the actions
+  for that item, links to it on another tab, and copying what it is known by.
+
+### Changed
+
+- Enter in a form's text box now presses its main button: Sign in, Take
+  snapshot, and Create, Save or Reset in the user, group and password
+  dialogs, as it already did for adding a member, assigning a licence and
+  filtering the logs.
 
 ## [1.6.0]
 

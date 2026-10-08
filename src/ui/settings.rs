@@ -1,5 +1,5 @@
 //! The Settings pane: light, dark, or follow the system, sounds, updates,
-//! and the debug log.
+//! the debug log, and the keyboard shortcuts.
 
 use egui::{RichText, Ui};
 
@@ -119,6 +119,27 @@ pub fn show(app: &mut App, ui: &mut Ui) {
             let ctx = ui.ctx().clone();
             crate::ui::update::check(app, &ctx, true);
         }
+
+        ui.add_space(16.0);
+        ui.label(RichText::new("Keyboard shortcuts").strong());
+        ui.add_space(6.0);
+        egui::Grid::new("shortcuts")
+            .num_columns(2)
+            .spacing([24.0, 6.0])
+            .show(ui, |ui| {
+                for (keys, what) in crate::ui::shortcuts::list(ui.ctx()) {
+                    ui.label(RichText::new(keys).monospace());
+                    ui.label(RichText::new(what).size(13.0));
+                    ui.end_row();
+                }
+            });
+        ui.label(
+            RichText::new(
+                "Right-click a row, a member, a licence holder or a detail for what can be done with it, including copying it.",
+            )
+            .size(12.0)
+            .weak(),
+        );
 
         if changed && let Err(err) = app.config.save() {
             app.report_error(format!("The setting could not be saved: {err}"));

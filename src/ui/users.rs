@@ -17,6 +17,7 @@ use crate::graph::users::{NewUser, UserEdit, generate_password};
 use crate::graph::{Graph, Result};
 use crate::task::{Task, take_finished};
 use crate::ui;
+use crate::ui::shortcuts::{self, Command};
 
 /// What a finished action changed, so the list can be patched in place rather
 /// than read again from the start.
@@ -61,6 +62,52 @@ struct ResetForm {
 struct ImportPreview {
     file: String,
     rows: Vec<ImportRow>,
+}
+
+/// What can be done to one user, from the buttons in the details panel or
+/// the row's right-click menu, which offer the same things in the same way.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Action {
+    Edit,
+    ToggleEnabled,
+    ResetPassword,
+    Delete,
+    Licences,
+    AutoReplies,
+    SignIns,
+}
+
+impl Action {
+    const ALL: [Self; 7] = [
+        Self::Edit,
+        Self::ToggleEnabled,
+        Self::ResetPassword,
+        Self::Delete,
+        Self::Licences,
+        Self::AutoReplies,
+        Self::SignIns,
+    ];
+
+    fn label(self, user: &User) -> &'static str {
+        match self {
+            Self::Edit => "Edit",
+            Self::ToggleEnabled if user.account_enabled == Some(false) => "Enable",
+            Self::ToggleEnabled => "Disable",
+            Self::ResetPassword => "Reset password",
+            Self::Delete => "Delete",
+            Self::Licences => "Licences…",
+            Self::AutoReplies => "Automatic replies…",
+            Self::SignIns => "Sign-ins",
+        }
+    }
+
+    fn hover(self) -> Option<&'static str> {
+        match self {
+            Self::AutoReplies => Some("Out-of-office replies for this mailbox"),
+            Self::SignIns => Some("This user's sign-ins, on the Logs tab"),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -164,6 +211,164 @@ impl State {
             Some(Ok(report)) if !report.concealed => Some(report),
             _ => None,
         }
+    }
+}
+
+/// The keyboard shortcuts' commands; see [`shortcuts`].
+pub fn command(app: &mut App, ctx: &egui::Context, command: Command) -> bool {
+    if app.graph.is_none() {
+        return false;
+    }
+    match command {
+        Command::Find => ui::request_find(ctx),
+        Command::Refresh => {
+            if app.users.import.is_none() {
+                reload(app, ctx);
+            }
+        }
+        Command::New => new_user(app),
+        Command::Delete => {
+            let Some(user) = app.users.selected_user().cloned() else { return false };
+            perform(app, ctx, &user, Action::Delete);
+        }
+        Command::Deselect => return app.users.selected.take().is_some(),
+    }
+    true
+}
+
+/// Show one user on this tab, from a member or holder elsewhere.
+pub fn show_user(app: &mut App, id: &str) {
+    app.users.selected = Some(id.to_owned());
+    app.users.query.clear();
+    app.tab = Tab::Users;
+}
+
+fn new_user(app: &mut App) {
+    if app.users.action.is_some() {
+        return;
+    }
+    app.users.form = Some((
+        Form::Create(NewUser {
+            password: generate_password(),
+            account_enabled: true,
+            force_change_password: true,
+            ..Default::default()
+        }),
+        None,
+    ));
+}
+
+/// The selected user's licences, once read.
+fn licensee_of(app: &App, user: &User) -> Option<Licensee> {
+    match &app.users.licences {
+        Some((id, Ok(l))) if *id == user.id => Some(l.clone()),
+        _ => None,
+    }
+}
+
+/// The selected user's automatic replies, once their mailbox has been read.
+fn replies_of(app: &App, user: &User) -> Option<crate::graph::mailbox::AutoReplies> {
+    match &app.users.mailbox {
+        Some((id, Ok(Some(settings)))) if *id == user.id => Some(settings.auto_replies.clone()),
+        _ => None,
+    }
+}
+
+fn available(app: &App, user: &User, action: Action) -> bool {
+    let idle = app.users.action.is_none();
+    match action {
+        Action::Licences => idle && licensee_of(app, user).is_some(),
+        Action::AutoReplies => idle && replies_of(app, user).is_some(),
+        Action::SignIns => !user.upn().is_empty(),
+        _ => idle,
+    }
+}
+
+fn perform(app: &mut App, ctx: &egui::Context, user: &User, action: Action) {
+    if !available(app, user, action) {
+        return;
+    }
+    match action {
+        Action::Edit => {
+            app.users.form = Some((
+                Form::Edit {
+                    id: user.id.clone(),
+                    edit: UserEdit::from_user(user),
+                },
+                None,
+            ));
+        }
+        Action::ToggleEnabled => {
+            let enabled = user.account_enabled != Some(false);
+            let id = user.id.clone();
+            let name = user.name().to_owned();
+            let mut updated = user.clone();
+            run(app, ctx, "Updating user…", move |g| {
+                g.set_user_enabled(&id, !enabled)?;
+                updated.account_enabled = Some(!enabled);
+                let verb = if enabled { "disabled" } else { "enabled" };
+                Ok((format!("{name} {verb}."), Change::Upsert(Box::new(updated))))
+            });
+        }
+        Action::ResetPassword => {
+            app.users.reset = Some(ResetForm {
+                id: user.id.clone(),
+                name: user.name().to_owned(),
+                password: generate_password(),
+                force_change: true,
+            });
+        }
+        Action::Delete => {
+            app.users.confirm_delete = Some((user.id.clone(), user.name().to_owned()));
+        }
+        Action::Licences => {
+            let Some(licensee) = licensee_of(app, user) else { return };
+            let direct = licensee
+                .license_assignment_states
+                .iter()
+                .filter(|s| s.assigned_by_group.is_none())
+                .map(|s| s.sku_id.to_lowercase())
+                .collect();
+            app.users.licence_form = Some(LicenceForm {
+                user: licensee,
+                direct,
+            });
+        }
+        Action::AutoReplies => {
+            let Some(replies) = replies_of(app, user) else { return };
+            app.users.reply_form = Some(ReplyForm {
+                id: user.id.clone(),
+                name: user.name().to_owned(),
+                edit: AutoReplyEdit::from_settings(&replies),
+                error: None,
+            });
+        }
+        Action::SignIns => ui::logs::sign_ins_for(app, ctx, user.upn()),
+    }
+}
+
+/// A row's right-click menu: what the details panel offers, and copying
+/// what the user is known by.
+fn row_menu(app: &App, ui: &mut Ui, user: &User, chosen: &mut Option<(Action, String)>) {
+    for action in Action::ALL {
+        if action == Action::Delete {
+            continue;
+        }
+        if ui
+            .add_enabled(available(app, user, action), egui::Button::new(action.label(user)))
+            .clicked()
+        {
+            *chosen = Some((action, user.id.clone()));
+        }
+    }
+    ui.separator();
+    ui::copy_item(ui, "display name", user.display_name.as_deref().unwrap_or(""));
+    ui::copy_item(ui, "sign-in name", user.upn());
+    ui::copy_item(ui, "mail address", user.mail.as_deref().unwrap_or(""));
+    ui::copy_item(ui, "object ID", &user.id);
+    ui.separator();
+    if ui::menu_item(ui, available(app, user, Action::Delete), "Delete", &shortcuts::DELETE) {
+        *chosen = Some((Action::Delete, user.id.clone()));
     }
 }
 
@@ -379,7 +584,9 @@ pub fn show(app: &mut App, ui: &mut Ui) {
         columns.push(("Mailbox", Column::initial(90.0).at_least(60.0)));
     }
     columns.push(("Status", Column::remainder().at_least(70.0)));
-    let clicked = ui::select_table(
+    let mut chosen = None;
+    let app_ref: &App = app;
+    let clicks = ui::select_table(
         ui,
         "users",
         &columns,
@@ -415,8 +622,9 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                 }
             }
         },
+        Some(&mut |row, ui| row_menu(app_ref, ui, &users[shown[row]], &mut chosen)),
     );
-    if let Some(row) = clicked {
+    if let Some(row) = clicks.clicked {
         let id = app.users.users[shown[row]].id.clone();
         app.users.selected = if app.users.selected.as_deref() == Some(&id) {
             None
@@ -424,24 +632,30 @@ pub fn show(app: &mut App, ui: &mut Ui) {
             Some(id)
         };
     }
+    if let Some(row) = clicks.right_clicked {
+        app.users.selected = Some(app.users.users[shown[row]].id.clone());
+    }
+    if let Some((action, id)) = chosen
+        && let Some(user) = app.users.users.iter().find(|u| u.id == id).cloned()
+    {
+        perform(app, &ctx, &user, action);
+    }
 }
 
 fn toolbar(app: &mut App, ui: &mut Ui, ctx: &egui::Context, shown: &[usize]) {
     let idle = app.users.load.is_none() && app.users.import.is_none();
     ui.horizontal_wrapped(|ui| {
-        if ui::tool_button(ui, idle, "Refresh").clicked() {
+        if ui::tool_button(ui, idle, "Refresh")
+            .on_hover_text(ui::shortcut_hint(ui, "Read the users again", &shortcuts::REFRESH))
+            .clicked()
+        {
             reload(app, ctx);
         }
-        if ui::tool_button(ui, app.users.action.is_none(), "+ New user").clicked() {
-            app.users.form = Some((
-                Form::Create(NewUser {
-                    password: generate_password(),
-                    account_enabled: true,
-                    force_change_password: true,
-                    ..Default::default()
-                }),
-                None,
-            ));
+        if ui::tool_button(ui, app.users.action.is_none(), "+ New user")
+            .on_hover_text(ui::shortcut_hint(ui, "Create a user", &shortcuts::NEW))
+            .clicked()
+        {
+            new_user(app);
         }
         ui.separator();
         if ui::tool_button(ui, idle, "Import CSV…").clicked() {
@@ -619,81 +833,24 @@ fn details(app: &mut App, ui: &mut Ui, ctx: &egui::Context) {
         ui.heading(user.name());
         ui.add_space(6.0);
 
-        let idle = app.users.action.is_none();
+        let mut chosen = None;
         ui.horizontal_wrapped(|ui| {
-            if ui::tool_button(ui, idle, "Edit").clicked() {
-                app.users.form = Some((
-                    Form::Edit {
-                        id: user.id.clone(),
-                        edit: UserEdit::from_user(&user),
-                    },
-                    None,
-                ));
-            }
-            let enabled = user.account_enabled != Some(false);
-            if ui::tool_button(ui, idle, if enabled { "Disable" } else { "Enable" }).clicked() {
-                let id = user.id.clone();
-                let name = user.name().to_owned();
-                let mut updated = user.clone();
-                run(app, ctx, "Updating user…", move |g| {
-                    g.set_user_enabled(&id, !enabled)?;
-                    updated.account_enabled = Some(!enabled);
-                    let verb = if enabled { "disabled" } else { "enabled" };
-                    Ok((format!("{name} {verb}."), Change::Upsert(Box::new(updated))))
-                });
-            }
-            if ui::tool_button(ui, idle, "Reset password").clicked() {
-                app.users.reset = Some(ResetForm {
-                    id: user.id.clone(),
-                    name: user.name().to_owned(),
-                    password: generate_password(),
-                    force_change: true,
-                });
-            }
-            if ui::tool_button(ui, idle, "Delete").clicked() {
-                app.users.confirm_delete = Some((user.id.clone(), user.name().to_owned()));
-            }
-            let licensee = match &app.users.licences {
-                Some((id, Ok(l))) if *id == user.id => Some(l.clone()),
-                _ => None,
-            };
-            if ui::tool_button(ui, idle && licensee.is_some(), "Licences…").clicked()
-                && let Some(licensee) = licensee
-            {
-                let direct = licensee
-                    .license_assignment_states
-                    .iter()
-                    .filter(|s| s.assigned_by_group.is_none())
-                    .map(|s| s.sku_id.to_lowercase())
-                    .collect();
-                app.users.licence_form = Some(LicenceForm {
-                    user: licensee,
-                    direct,
-                });
-            }
-            let replies = match &app.users.mailbox {
-                Some((id, Ok(Some(settings)))) if *id == user.id => Some(settings.auto_replies.clone()),
-                _ => None,
-            };
-            if ui::tool_button(ui, idle && replies.is_some(), "Automatic replies…")
-                .on_hover_text("Out-of-office replies for this mailbox")
-                .clicked()
-                && let Some(replies) = replies
-            {
-                app.users.reply_form = Some(ReplyForm {
-                    id: user.id.clone(),
-                    name: user.name().to_owned(),
-                    edit: AutoReplyEdit::from_settings(&replies),
-                    error: None,
-                });
-            }
-            if ui::tool_button(ui, !user.upn().is_empty(), "Sign-ins")
-                .on_hover_text("This user's sign-ins, on the Logs tab")
-                .clicked()
-            {
-                ui::logs::sign_ins_for(app, ctx, user.upn());
+            for action in Action::ALL {
+                let mut button = ui::tool_button(ui, available(app, &user, action), action.label(&user));
+                if let Some(hover) = action.hover() {
+                    button = button.on_hover_text(hover);
+                }
+                if action == Action::Delete {
+                    button = button.on_hover_text(ui::shortcut_hint(ui, "Delete this user", &shortcuts::DELETE));
+                }
+                if button.clicked() {
+                    chosen = Some(action);
+                }
             }
         });
+        if let Some(action) = chosen {
+            perform(app, ctx, &user, action);
+        }
         if user.on_premises_sync_enabled == Some(true) {
             ui.label(
                 RichText::new("Synchronised from on-premises Active Directory: most changes have to be made there.")
@@ -732,8 +889,21 @@ fn details(app: &mut App, ui: &mut Ui, ctx: &egui::Context) {
                 if groups.is_empty() {
                     ui.label(RichText::new("No groups.").weak());
                 }
+                let mut open = None;
                 for g in groups {
-                    ui.label(format!("{}  ·  {}", g.name(), g.kind()));
+                    let label = ui.add(
+                        egui::Label::new(format!("{}  ·  {}", g.name(), g.kind())).sense(egui::Sense::click()),
+                    );
+                    label.context_menu(|ui| {
+                        if g.kind() == "group" && ui.button("Show in Groups").clicked() {
+                            open = Some(g.id.clone());
+                        }
+                        ui::copy_item(ui, "name", g.name());
+                        ui::copy_item(ui, "object ID", &g.id);
+                    });
+                }
+                if let Some(id) = open {
+                    ui::groups::show_group(app, &id);
                 }
             }
             Some((id, Err(err))) if *id == user.id => ui::error_text(ui, err),
@@ -1056,6 +1226,7 @@ fn form_modal(app: &mut App, ctx: &egui::Context) {
         return;
     };
     let mut answer = None;
+    let mut enter = false;
     let modal = egui::Modal::new(egui::Id::new("user-form")).show(ctx, |ui| {
         ui.set_width(460.0);
         egui::ScrollArea::vertical()
@@ -1066,32 +1237,34 @@ fn form_modal(app: &mut App, ctx: &egui::Context) {
                     ui.add_space(6.0);
                     let first = ui::labelled_field(ui, "Display name", &mut u.display_name, "Jo Bloggs");
                     ui::focus_on_open(ui, egui::Id::new("user-form"), &first);
-                    ui::labelled_field(ui, "User principal name", &mut u.user_principal_name, "jo.bloggs@contoso.com");
-                    ui::labelled_field(ui, "Mail nickname (optional)", &mut u.mail_nickname, "from the user principal name");
-                    ui::labelled_field(ui, "Initial password", &mut u.password, "");
+                    enter |= ui::submitted(&first);
+                    enter |= ui::submitted(&ui::labelled_field(ui, "User principal name", &mut u.user_principal_name, "jo.bloggs@contoso.com"));
+                    enter |= ui::submitted(&ui::labelled_field(ui, "Mail nickname (optional)", &mut u.mail_nickname, "from the user principal name"));
+                    enter |= ui::submitted(&ui::labelled_field(ui, "Initial password", &mut u.password, ""));
                     ui.checkbox(&mut u.force_change_password, "Must change password at next sign-in");
                     ui.checkbox(&mut u.account_enabled, "Account enabled");
                     ui.add_space(6.0);
-                    ui::labelled_field(ui, "Given name", &mut u.given_name, "");
-                    ui::labelled_field(ui, "Surname", &mut u.surname, "");
-                    ui::labelled_field(ui, "Job title", &mut u.job_title, "");
-                    ui::labelled_field(ui, "Department", &mut u.department, "");
-                    ui::labelled_field(ui, "Office", &mut u.office_location, "");
-                    ui::labelled_field(ui, "Mobile phone", &mut u.mobile_phone, "");
-                    ui::labelled_field(ui, "Usage location", &mut u.usage_location, "GB");
+                    enter |= ui::submitted(&ui::labelled_field(ui, "Given name", &mut u.given_name, ""));
+                    enter |= ui::submitted(&ui::labelled_field(ui, "Surname", &mut u.surname, ""));
+                    enter |= ui::submitted(&ui::labelled_field(ui, "Job title", &mut u.job_title, ""));
+                    enter |= ui::submitted(&ui::labelled_field(ui, "Department", &mut u.department, ""));
+                    enter |= ui::submitted(&ui::labelled_field(ui, "Office", &mut u.office_location, ""));
+                    enter |= ui::submitted(&ui::labelled_field(ui, "Mobile phone", &mut u.mobile_phone, ""));
+                    enter |= ui::submitted(&ui::labelled_field(ui, "Usage location", &mut u.usage_location, "GB"));
                 }
                 Form::Edit { edit, .. } => {
                     ui.heading("Edit user");
                     ui.add_space(6.0);
                     let first = ui::labelled_field(ui, "Display name", &mut edit.display_name, "");
                     ui::focus_on_open(ui, egui::Id::new("user-form"), &first);
-                    ui::labelled_field(ui, "Given name", &mut edit.given_name, "");
-                    ui::labelled_field(ui, "Surname", &mut edit.surname, "");
-                    ui::labelled_field(ui, "Job title", &mut edit.job_title, "");
-                    ui::labelled_field(ui, "Department", &mut edit.department, "");
-                    ui::labelled_field(ui, "Office", &mut edit.office_location, "");
-                    ui::labelled_field(ui, "Mobile phone", &mut edit.mobile_phone, "");
-                    ui::labelled_field(ui, "Usage location", &mut edit.usage_location, "GB");
+                    enter |= ui::submitted(&first);
+                    enter |= ui::submitted(&ui::labelled_field(ui, "Given name", &mut edit.given_name, ""));
+                    enter |= ui::submitted(&ui::labelled_field(ui, "Surname", &mut edit.surname, ""));
+                    enter |= ui::submitted(&ui::labelled_field(ui, "Job title", &mut edit.job_title, ""));
+                    enter |= ui::submitted(&ui::labelled_field(ui, "Department", &mut edit.department, ""));
+                    enter |= ui::submitted(&ui::labelled_field(ui, "Office", &mut edit.office_location, ""));
+                    enter |= ui::submitted(&ui::labelled_field(ui, "Mobile phone", &mut edit.mobile_phone, ""));
+                    enter |= ui::submitted(&ui::labelled_field(ui, "Usage location", &mut edit.usage_location, "GB"));
                 }
             });
         if let Some(err) = error.as_ref() {
@@ -1103,6 +1276,9 @@ fn form_modal(app: &mut App, ctx: &egui::Context) {
         };
         answer = ui::form_buttons(ui, label, true);
     });
+    if enter && answer.is_none() {
+        answer = Some(true);
+    }
     if modal.should_close() && answer.is_none() {
         answer = Some(false);
     }
@@ -1175,6 +1351,9 @@ fn reset_modal(app: &mut App, ctx: &egui::Context) {
                 .weak(),
         );
         answer = ui::form_buttons(ui, "Reset", !reset.password.is_empty());
+        if ui::submitted(&field) && !reset.password.is_empty() && answer.is_none() {
+            answer = Some(true);
+        }
     });
     if modal.should_close() && answer.is_none() {
         answer = Some(false);

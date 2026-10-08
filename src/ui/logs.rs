@@ -10,6 +10,7 @@ use crate::csvio;
 use crate::graph::logs::{DirectoryAudit, Entries, LogQuery, MAX_ENTRIES, Range, SignIn, log_time};
 use crate::task::{Task, take_finished};
 use crate::ui;
+use crate::ui::shortcuts::{self, Command};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Kind {
@@ -150,13 +151,34 @@ fn load(app: &mut App, ctx: &egui::Context) {
     });
 }
 
-/// Show one user's sign-ins: from the Users pane's details panel.
+/// The keyboard shortcuts' commands; see [`shortcuts`]. Refresh reads the
+/// log again with the filters as they are set, as Load does.
+pub fn command(app: &mut App, ctx: &egui::Context, command: Command) -> bool {
+    if app.graph.is_none() {
+        return false;
+    }
+    match command {
+        Command::Find => ui::request_find(ctx),
+        Command::Refresh => load(app, ctx),
+        Command::Deselect => return app.logs.selected.take().is_some(),
+        Command::New | Command::Delete => return false,
+    }
+    true
+}
+
+/// Show one user's sign-ins: from the Users pane's details panel, or a
+/// sign-in's right-click menu.
 pub fn sign_ins_for(app: &mut App, ctx: &egui::Context, upn: &str) {
+    filter_by(app, ctx, Kind::SignIns, upn);
+}
+
+/// Read one log again for one sign-in name, from the start of the range.
+fn filter_by(app: &mut App, ctx: &egui::Context, kind: Kind, upn: &str) {
     if app.logs.load.is_some() {
         app.report_error("The logs are still loading. Try again in a moment.");
         return;
     }
-    app.logs.kind = Kind::SignIns;
+    app.logs.kind = kind;
     app.logs.query.user = upn.to_owned();
     app.logs.query.failures_only = false;
     app.logs.search.clear();
@@ -294,11 +316,14 @@ fn toolbar(app: &mut App, ui: &mut Ui, ctx: &egui::Context) {
                 .desired_width(260.0),
         );
         let user = ui::named(user, "Sign-in name to filter by");
-        if user.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+        if ui::submitted(&user) {
             reload = true;
         }
         ui.checkbox(&mut app.logs.query.failures_only, "Failures only");
-        if ui::tool_button(ui, idle, "Load").clicked() {
+        if ui::tool_button(ui, idle, "Load")
+            .on_hover_text(ui::shortcut_hint(ui, "Read the log with these filters", &shortcuts::REFRESH))
+            .clicked()
+        {
             reload = true;
         }
         ui.separator();
@@ -386,7 +411,9 @@ fn sign_ins_view(app: &mut App, ui: &mut Ui) {
     let selected_index = selected
         .as_ref()
         .and_then(|s| rows.iter().position(|r| r.id == s.id));
-    let clicked = ui::select_table(
+    let idle = app.logs.load.is_none();
+    let mut follow = None;
+    let clicks = ui::select_table(
         ui,
         "sign-ins",
         &[
@@ -410,10 +437,50 @@ fn sign_ins_view(app: &mut App, ui: &mut Ui) {
                 _ => ui::cell_text(ui, &s.place()),
             }
         },
+        Some(&mut |row, ui| {
+            let s = rows[row];
+            let upn = s.user_principal_name.as_deref().unwrap_or("");
+            if ui
+                .add_enabled(idle && !upn.is_empty(), egui::Button::new("Show only this user's sign-ins"))
+                .clicked()
+            {
+                follow = Some(Follow::SignIns(upn.to_owned()));
+            }
+            let user_id = s.user_id.as_deref().unwrap_or("");
+            if ui.add_enabled(!user_id.is_empty(), egui::Button::new("Show in Users")).clicked() {
+                follow = Some(Follow::User(user_id.to_owned()));
+            }
+            ui.separator();
+            ui::copy_item(ui, "sign-in name", upn);
+            ui::copy_item(ui, "IP address", s.ip_address.as_deref().unwrap_or(""));
+            ui::copy_item(ui, "correlation ID", s.correlation_id.as_deref().unwrap_or(""));
+            ui::copy_item(ui, "sign-in ID", &s.id);
+        }),
     );
-    let clicked = clicked.map(|row| rows[row].id.clone());
+    let clicked = clicks.clicked.map(|row| rows[row].id.clone());
+    let right_clicked = clicks.right_clicked.map(|row| rows[row].id.clone());
     if let Some(id) = clicked {
         toggle(&mut app.logs.selected, id);
+    }
+    if let Some(id) = right_clicked {
+        app.logs.selected = Some(id);
+    }
+    follow_up(app, ui.ctx(), follow);
+}
+
+/// Somewhere a log entry's right-click menu leads.
+enum Follow {
+    SignIns(String),
+    Audits(String),
+    User(String),
+}
+
+fn follow_up(app: &mut App, ctx: &egui::Context, follow: Option<Follow>) {
+    match follow {
+        Some(Follow::SignIns(upn)) => filter_by(app, ctx, Kind::SignIns, &upn),
+        Some(Follow::Audits(upn)) => filter_by(app, ctx, Kind::Audit, &upn),
+        Some(Follow::User(id)) => ui::users::show_user(app, &id),
+        None => {}
     }
 }
 
@@ -483,7 +550,9 @@ fn audits_view(app: &mut App, ui: &mut Ui) {
     let selected_index = selected
         .as_ref()
         .and_then(|a| rows.iter().position(|r| r.id == a.id));
-    let clicked = ui::select_table(
+    let idle = app.logs.load.is_none();
+    let mut follow = None;
+    let clicks = ui::select_table(
         ui,
         "audits",
         &[
@@ -507,11 +576,39 @@ fn audits_view(app: &mut App, ui: &mut Ui) {
                 _ => outcome_label(ui, a.succeeded(), a.result.as_deref().unwrap_or("")),
             }
         },
+        Some(&mut |row, ui| {
+            let a = rows[row];
+            // Only a person can be filtered by: an app that made a change
+            // has no sign-in name.
+            let by = a
+                .initiated_by
+                .user
+                .as_ref()
+                .and_then(|u| u.user_principal_name.as_deref())
+                .unwrap_or("");
+            if ui
+                .add_enabled(idle && !by.is_empty(), egui::Button::new("Show only changes by this person"))
+                .clicked()
+            {
+                follow = Some(Follow::Audits(by.to_owned()));
+            }
+            ui.separator();
+            ui::copy_item(ui, "activity", a.activity());
+            ui::copy_item(ui, "initiator", &a.initiator());
+            ui::copy_item(ui, "target", &a.target());
+            ui::copy_item(ui, "correlation ID", a.correlation_id.as_deref().unwrap_or(""));
+            ui::copy_item(ui, "audit ID", &a.id);
+        }),
     );
-    let clicked = clicked.map(|row| rows[row].id.clone());
+    let clicked = clicks.clicked.map(|row| rows[row].id.clone());
+    let right_clicked = clicks.right_clicked.map(|row| rows[row].id.clone());
     if let Some(id) = clicked {
         toggle(&mut app.logs.selected, id);
     }
+    if let Some(id) = right_clicked {
+        app.logs.selected = Some(id);
+    }
+    follow_up(app, ui.ctx(), follow);
 }
 
 fn audit_details(ui: &mut Ui, a: &DirectoryAudit) {

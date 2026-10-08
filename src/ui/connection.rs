@@ -243,19 +243,24 @@ pub fn show(app: &mut App, ui: &mut Ui) {
     egui::ScrollArea::vertical().show(ui, |ui| {
         ui.set_max_width(640.0);
         let s = &mut app.connection;
-        ui::labelled_field(
+        // Enter in any of the three boxes signs in, when not signed in yet.
+        let mut enter = ui::submitted(&ui::labelled_field(
             ui,
             "Directory (tenant) ID",
             &mut s.tenant_id,
             "00000000-0000-0000-0000-000000000000 or contoso.onmicrosoft.com",
-        );
-        ui::labelled_field(
+        ));
+        enter |= ui::submitted(&ui::labelled_field(
             ui,
             "Application (client) ID",
             &mut s.client_id,
             "00000000-0000-0000-0000-000000000000",
-        );
-        ui::labelled_password(ui, "Client secret (the secret's Value, not its ID)", &mut s.client_secret);
+        ));
+        enter |= ui::submitted(&ui::labelled_password(
+            ui,
+            "Client secret (the secret's Value, not its ID)",
+            &mut s.client_secret,
+        ));
         ui.checkbox(
             &mut s.remember_secret,
             format!(
@@ -305,6 +310,7 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                 .add_enabled_ui(!busy, |ui| ui::wide_button(ui, label))
                 .inner
                 .clicked()
+                || (enter && !busy)
             {
                 start(app, &ctx);
             }

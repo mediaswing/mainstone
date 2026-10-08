@@ -9,6 +9,7 @@ pub mod licensing;
 pub mod logs;
 pub mod servers;
 pub mod settings;
+pub mod shortcuts;
 pub mod update;
 pub mod users;
 
@@ -219,13 +220,35 @@ pub fn warn_colour(ui: &Ui) -> Color32 {
     crate::theme::palette(ui.visuals()).warn
 }
 
-/// A search box that fills the width it is given.
+fn find_id() -> Id {
+    Id::new("find-requested")
+}
+
+/// Ask the search box of the pane showing to take the cursor; see
+/// [`shortcuts::Command::Find`]. Only for a pane that is showing one.
+pub fn request_find(ctx: &egui::Context) {
+    ctx.data_mut(|d| d.insert_temp(find_id(), true));
+}
+
+/// A search box that fills the width it is given. When asked to by
+/// [`request_find`], it takes the cursor with what is in it selected, so
+/// typing replaces the last search.
 pub fn search_box(ui: &mut Ui, query: &mut String, hint: &str) -> Response {
-    let response = egui::TextEdit::singleline(query)
+    let mut output = egui::TextEdit::singleline(query)
         .hint_text(hint)
         .desired_width(ui.available_width())
         .margin(egui::vec2(8.0, 6.0))
-        .ui(ui);
+        .show(ui);
+    let find = ui.ctx().data_mut(|d| d.remove_temp::<bool>(find_id())).is_some();
+    let response = output.response.response;
+    if find {
+        response.request_focus();
+        output
+            .state
+            .cursor
+            .set_char_range(Some(egui::text::CCursorRange::select_all(&output.galley)));
+        output.state.store(ui.ctx(), response.id);
+    }
     named(response, "Search")
 }
 
@@ -235,12 +258,77 @@ pub fn tool_button(ui: &mut Ui, enabled: bool, text: &str) -> Response {
 }
 
 /// One property in a details panel: the name small and weak, the value under
-/// it, selectable so it can be copied.
+/// it, selectable so part of it can be copied, and with a right-click menu
+/// that copies the whole of it.
 pub fn property(ui: &mut Ui, name: &str, value: &str) {
     ui.label(RichText::new(name).size(12.0).weak());
     let shown = if value.is_empty() { "—" } else { value };
-    ui.add(egui::Label::new(RichText::new(shown).size(14.0)).selectable(true).wrap());
+    let response = ui.add(egui::Label::new(RichText::new(shown).size(14.0)).selectable(true).wrap());
+    if !value.is_empty() {
+        response.context_menu(|ui| {
+            if ui.button("Copy").clicked() {
+                copy(ui.ctx(), value, format!("{name} copied."));
+            }
+        });
+    }
     ui.add_space(4.0);
+}
+
+fn copied_id() -> Id {
+    Id::new("copied-from-menu")
+}
+
+/// Put `value` on the clipboard, and `message` in the status bar at the end
+/// of the frame. Menus are drawn deep inside tables and panels that cannot
+/// reach the app, so the message waits in egui's memory until it can.
+pub fn copy(ctx: &egui::Context, value: &str, message: String) {
+    ctx.copy_text(value.to_owned());
+    ctx.data_mut(|d| d.insert_temp(copied_id(), message));
+}
+
+/// The message for whatever [`copy`] put on the clipboard this frame.
+pub fn take_copied(ctx: &egui::Context) -> Option<String> {
+    ctx.data_mut(|d| d.remove_temp(copied_id()))
+}
+
+/// A menu item that copies one of the things a row is known by, greyed out
+/// when it has none. `what` reads in the middle of a sentence: "sign-in name".
+pub fn copy_item(ui: &mut Ui, what: &str, value: &str) {
+    if ui
+        .add_enabled(!value.is_empty(), egui::Button::new(format!("Copy {what}")))
+        .clicked()
+    {
+        copy(ui.ctx(), value, format!("Copied the {what}."));
+    }
+}
+
+/// A menu item for a command that also has a keyboard shortcut, which is
+/// shown beside it in this platform's spelling.
+pub fn menu_item(ui: &mut Ui, enabled: bool, text: &str, shortcut: &egui::KeyboardShortcut) -> bool {
+    let keys = ui.ctx().format_shortcut(shortcut);
+    ui.add_enabled(enabled, egui::Button::new(text).shortcut_text(keys))
+        .clicked()
+}
+
+/// A line of widgets that can be right-clicked as a whole, such as a group
+/// member. The line takes its clicks before what is on it does, so a button
+/// on it still gets its own.
+pub fn menu_row<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> egui::InnerResponse<R> {
+    let builder = egui::UiBuilder::new()
+        .sense(egui::Sense::click())
+        .layout(egui::Layout::left_to_right(egui::Align::Center));
+    ui.scope_builder(builder, add)
+}
+
+/// A tooltip that ends with the keyboard shortcut for the same thing.
+pub fn shortcut_hint(ui: &Ui, text: &str, shortcut: &egui::KeyboardShortcut) -> String {
+    format!("{text} ({})", ui.ctx().format_shortcut(shortcut))
+}
+
+/// Whether Enter was pressed to leave this single-line text box: the usual
+/// way of pressing a form's main button without reaching for the mouse.
+pub fn submitted(response: &Response) -> bool {
+    response.lost_focus() && response.ctx.input(|i| i.key_pressed(egui::Key::Enter))
 }
 
 /// A line saying something is happening, with a spinner.
@@ -259,8 +347,22 @@ pub fn not_connected(ui: &mut Ui) -> bool {
     ui.button("Go to Connection").clicked()
 }
 
-/// A selectable table: one row per item, clicking a row selects it. Returns
-/// the index of the row clicked this frame, if any.
+/// What happened to a [`select_table`] this frame.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct TableClicks {
+    /// The row clicked, which toggles its selection.
+    pub clicked: Option<usize>,
+    /// The row right-clicked, which selects it, so that its details panel
+    /// shows the same thing its menu acts on.
+    pub right_clicked: Option<usize>,
+}
+
+/// The right-click menu for a row of a [`select_table`], given the row's
+/// index.
+pub type RowMenu<'a> = &'a mut dyn FnMut(usize, &mut Ui);
+
+/// A selectable table: one row per item, clicking a row selects it, and
+/// right-clicking it opens `menu`, if there is one.
 pub fn select_table(
     ui: &mut Ui,
     id_salt: &str,
@@ -268,10 +370,11 @@ pub fn select_table(
     rows: usize,
     selected: Option<usize>,
     mut cell: impl FnMut(usize, usize, &mut Ui),
-) -> Option<usize> {
+    mut menu: Option<RowMenu<'_>>,
+) -> TableClicks {
     use egui_extras::TableBuilder;
 
-    let mut clicked = None;
+    let mut clicks = TableClicks::default();
     let mut table = TableBuilder::new(ui)
         .id_salt(id_salt)
         .striped(true)
@@ -297,12 +400,19 @@ pub fn select_table(
                 for column in 0..columns.len() {
                     row.col(|ui| cell(index, column, ui));
                 }
-                if row.response().clicked() {
-                    clicked = Some(index);
+                let response = row.response();
+                if response.clicked() {
+                    clicks.clicked = Some(index);
+                }
+                if response.secondary_clicked() {
+                    clicks.right_clicked = Some(index);
+                }
+                if let Some(menu) = menu.as_mut() {
+                    response.context_menu(|ui| menu(index, ui));
                 }
             });
         });
-    clicked
+    clicks
 }
 
 /// A table cell's text, cut short rather than wrapped.

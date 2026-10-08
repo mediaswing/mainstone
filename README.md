@@ -274,9 +274,40 @@ systems report their name and kernel, but no packages.
 
 **Export** copies the directory into a MariaDB or MySQL server; see below.
 
-**Settings** chooses light, dark, or following the system, turns update
-checks and the debug log on or off, and has a **Check now** button for
-updates.
+**Settings** chooses light, dark, or following the system, turns the sounds,
+update checks and the debug log on or off, has a **Check now** button for
+updates, and lists the keyboard shortcuts.
+
+### Right-click menus
+
+Right-click a row in any list for what can be done with it. A user's menu has
+the same actions as their details panel (Edit, Disable, Reset password,
+Licences, Automatic replies, Sign-ins, Delete) and copies their display name,
+sign-in name, mail address or object ID. A device's has its Intune and Entra
+actions and copies its name, primary user, serial number or IDs. A sign-in
+can be narrowed to that user's sign-ins, and an audit entry to the changes
+made by the same person. Group members, licence holders and a user's groups
+can be opened on their own tab. Right-click any value in a details panel to
+copy it.
+
+### Keyboard shortcuts
+
+⌘ on a Mac is Ctrl on Windows and Linux.
+
+| Keys | What they do |
+| --- | --- |
+| ⌘1 to ⌘9 | Go to a tab, in the order they are listed |
+| Ctrl+Tab / Ctrl+Shift+Tab | Next or previous tab |
+| ⌘, | Settings |
+| ⌘F | Search the list |
+| ⌘R or F5 | Refresh the list, load the logs, or take the server snapshot again |
+| ⌘N | New user or group |
+| Delete or ⌘Backspace | Delete the selected user or group, after asking |
+| Escape | Clear the selection, closing the details panel |
+| Enter | In a form's text box: the form's main button |
+
+None of them work behind a dialog or an open menu, and Delete and Escape are
+left to a text box while you are typing in one.
 
 ## Updates
 
