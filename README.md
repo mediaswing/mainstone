@@ -48,6 +48,8 @@ registration's *application* permissions allow, and nothing more.
 | `MailboxSettings.ReadWrite` | Automatic replies, and a mailbox's time zone and language (optional) |
 | `Reports.Read.All` | Mailbox sizes and last activity (optional) |
 | `Organization.Read.All` | Showing the tenant's name (optional) |
+| `Application.Read.All` | Listing the apps connected to the tenant and their permissions |
+| `Directory.Read.All` | The delegated permissions users and admins consented to, on the Apps tab (optional) |
 
 For a read-only setup, grant the `.Read.All` versions of these instead. The
 lists will load, and any change you try will be refused with a message saying
@@ -138,7 +140,7 @@ rotated in Entra, sign in once with the new value and the file is updated.
 
 ## The window
 
-Nine tabs run down the left-hand side, the same layout as
+Ten tabs run down the left-hand side, the same layout as
 [watchspend](https://github.com/mediaswing/watchspend). The status bar along
 the bottom shows which tenant you are signed in to, what the app is doing,
 and the result of the last action. Every Graph and MariaDB call runs in the
@@ -214,6 +216,46 @@ Entra half can be enabled, disabled, or deleted from Entra ID.
 If the tenant has no Intune licence, or the app lacks the Intune permission,
 the Entra devices are still shown, with a note saying why the Intune devices
 are missing.
+
+**Apps** lists every app connected to the tenant: the enterprise apps
+behind each sign-in with Microsoft, third-party services that were granted
+access, and the tenant's own app registrations. It only reads; nothing on
+this tab changes the tenant. Microsoft's own apps, of which a tenant has
+hundreds, are left out until you choose **Microsoft** or **All apps**. The
+other filters pick out apps that need attention, hold high privileges, come
+from a third party or this tenant, have credentials running out, or have not
+been used. The search also matches flags, so typing `consent` finds apps
+users consented to themselves.
+
+Each app is flagged when something about it is worth a second look:
+
+| Flag | Meaning |
+| --- | --- |
+| Critical permissions | A permission enough to take over the tenant, such as `RoleManagement.ReadWrite.Directory` or `Application.ReadWrite.All` |
+| High privilege | It can read or change everyone's data: every mailbox, every file, every chat, or the directory |
+| Credentials expired | All of its secrets and certificates have expired |
+| Credentials expiring | Its last valid secret or certificate expires within 30 days |
+| User consent | Users consented to it themselves, without an administrator |
+| Unverified publisher | A third-party app whose publisher Microsoft has not verified |
+| Unused | No sign-ins in the last 90 days |
+| Disabled | Sign-in is turned off for it |
+
+Only the *last* credential to expire counts, so an old secret left beside a
+newer one doesn't raise a flag. The list's **Permissions** column counts
+application permissions on Microsoft Graph, Exchange Online and SharePoint,
+which are the ones that matter most; an app's details list them on every
+API. Selecting an app shows its secrets and certificates with their expiry
+dates, its application and delegated permissions (high ones in amber,
+critical ones in red, with Microsoft's description on hover), who consented,
+which users and groups are assigned to it, and its owners. **Export …
+shown** writes the apps listed to a CSV file.
+
+When each app last signed in comes from a Microsoft Graph *beta* report,
+which needs `AuditLog.Read.All` and an Entra ID P1 or P2 licence. Without
+them the **Last sign-in** column is empty and nothing is flagged as unused.
+Reading delegated permissions needs `Directory.Read.All`: Microsoft accepts
+nothing narrower for it with an app-only token. Without it, the rest of the
+tab works and says what is missing.
 
 **Licensing** lists the tenant's subscriptions, with how many of each are
 assigned, how many are left, and their status. Products are shown by the
@@ -296,7 +338,7 @@ copy it.
 
 | Keys | What they do |
 | --- | --- |
-| ⌘1 to ⌘9 | Go to a tab, in the order they are listed |
+| ⌘1 to ⌘9 | Go to one of the first nine tabs, in the order they are listed |
 | Ctrl+Tab / Ctrl+Shift+Tab | Next or previous tab |
 | ⌘, | Settings |
 | ⌘F | Search the list |

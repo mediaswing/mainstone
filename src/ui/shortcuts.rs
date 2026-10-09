@@ -51,6 +51,7 @@ pub const NEXT_TAB: KeyboardShortcut = shortcut(Modifiers::CTRL, Key::Tab);
 pub const PREVIOUS_TAB: KeyboardShortcut = shortcut(CTRL_SHIFT, Key::Tab);
 
 /// Command-1 to Command-9, one for each tab in the order they are listed.
+/// There are more tabs than digits; the last, Settings, has Command-comma.
 const TAB_KEYS: [Key; 9] = [
     Key::Num1,
     Key::Num2,
@@ -68,9 +69,9 @@ const TAB_KEYS: [Key; 9] = [
 pub fn list(ctx: &egui::Context) -> Vec<(String, &'static str)> {
     let f = |s: &KeyboardShortcut| ctx.format_shortcut(s);
     let first = shortcut(Modifiers::COMMAND, TAB_KEYS[0]);
-    let last = shortcut(Modifiers::COMMAND, TAB_KEYS[Tab::ALL.len() - 1]);
+    let last = shortcut(Modifiers::COMMAND, TAB_KEYS[Tab::ALL.len().min(TAB_KEYS.len()) - 1]);
     vec![
-        (format!("{} to {}", f(&first), f(&last)), "Go to a tab, in the order they are listed"),
+        (format!("{} to {}", f(&first), f(&last)), "Go to one of the first nine tabs, in the order they are listed"),
         (format!("{} / {}", f(&NEXT_TAB), f(&PREVIOUS_TAB)), "Next or previous tab"),
         (f(&SETTINGS), "Settings"),
         (f(&FIND), "Search the list"),
@@ -146,6 +147,7 @@ fn command(app: &mut App, ctx: &egui::Context, command: Command) -> bool {
         Tab::Users => ui::users::command(app, ctx, command),
         Tab::Groups => ui::groups::command(app, ctx, command),
         Tab::Devices => ui::devices::command(app, ctx, command),
+        Tab::Apps => ui::apps::command(app, ctx, command),
         Tab::Licensing => ui::licensing::command(app, ctx, command),
         Tab::Logs => ui::logs::command(app, ctx, command),
         Tab::Servers => ui::servers::command(app, ctx, command),

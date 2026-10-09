@@ -1,6 +1,7 @@
 //! The panes, and the widget helpers they share. The helpers come from
 //! watchspend, so the two apps look and behave alike.
 
+pub mod apps;
 pub mod connection;
 pub mod devices;
 pub mod export;

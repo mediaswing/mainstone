@@ -1,4 +1,4 @@
-//! Users in and out of CSV files, and logs and server packages out.
+//! Users in and out of CSV files, and logs, apps and server packages out.
 //!
 //! The import reads a header row and matches columns by name, ignoring case,
 //! spaces and underscores, so `userPrincipalName`, `User Principal Name` and
@@ -8,6 +8,7 @@
 
 use std::path::Path;
 
+use crate::graph::apps::{ConnectedApp, Inventory};
 use crate::graph::logs::{DirectoryAudit, SignIn, log_time};
 use crate::graph::models::User;
 use crate::graph::users::NewUser;
@@ -249,6 +250,51 @@ pub fn write_users(path: &Path, users: &[&User]) -> Result<(), String> {
                 s(&u.user_type),
                 s(&u.created_date_time),
                 b(u.on_premises_sync_enabled),
+            ])
+            .map_err(|e| e.to_string())?;
+    }
+    writer.flush().map_err(|e| e.to_string())
+}
+
+/// One row per app. Lists of permissions and flags are joined into one cell
+/// each, separated by `; `. The application permissions are those on
+/// Microsoft Graph, Exchange Online and SharePoint, as the list shows them.
+pub fn write_apps(path: &Path, apps: &[&ConnectedApp], inventory: &Inventory) -> Result<(), String> {
+    let mut writer = csv::Writer::from_path(path).map_err(|e| e.to_string())?;
+    writer
+        .write_record([
+            "displayName", "appId", "objectId", "kind", "publisher", "verifiedPublisher",
+            "enabled", "assignmentRequired", "lastSignIn", "credentialsEnd",
+            "applicationPermissions", "adminConsentedPermissions", "userConsentedPermissions",
+            "usersConsented", "flags",
+        ])
+        .map_err(|e| e.to_string())?;
+    let join = |values: Vec<String>| to_cell(&values.join("; "));
+    let delegated = |app: &ConnectedApp, for_everyone: bool| {
+        inventory
+            .delegated_permissions(app, for_everyone)
+            .into_iter()
+            .map(|p| format!("{}: {}", p.resource, p.value))
+            .collect::<Vec<_>>()
+    };
+    for a in apps {
+        writer
+            .write_record([
+                to_cell(a.name()),
+                to_cell(&a.sp.app_id),
+                to_cell(&a.sp.id),
+                a.kind.label().to_owned(),
+                to_cell(a.sp.publisher_name.as_deref().unwrap_or_default()),
+                to_cell(a.verified_publisher().unwrap_or_default()),
+                a.enabled().to_string(),
+                a.sp.app_role_assignment_required.map(|b| b.to_string()).unwrap_or_default(),
+                to_cell(a.last_sign_in.as_deref().unwrap_or_default()),
+                a.credentials_end().map(|t| t.to_rfc3339()).unwrap_or_default(),
+                join(inventory.app_permission_names(&a.app_roles)),
+                join(delegated(a, true)),
+                join(delegated(a, false)),
+                a.consenting_users().len().to_string(),
+                join(a.flags.iter().map(|f| f.label().to_owned()).collect()),
             ])
             .map_err(|e| e.to_string())?;
     }

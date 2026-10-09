@@ -41,7 +41,7 @@ use super::{Graph, LOGIN, REQUIRED_ROLES, Result, aadsts_summary, checked_tenant
 /// administrators working with Graph interactively.
 const ADMIN_CLIENT_ID: &str = "14d82eec-204b-4c2f-b7e8-296a70dab67e";
 /// Microsoft Graph's own application ID, the same in every tenant.
-const GRAPH_APP_ID: &str = "00000003-0000-0000-c000-000000000000";
+pub(crate) const GRAPH_APP_ID: &str = "00000003-0000-0000-c000-000000000000";
 /// Just enough to edit app registrations and assign app roles.
 const ADMIN_SCOPES: &str = "https://graph.microsoft.com/Application.ReadWrite.All \
 https://graph.microsoft.com/AppRoleAssignment.ReadWrite.All";

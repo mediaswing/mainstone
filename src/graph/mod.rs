@@ -11,6 +11,7 @@
 //! hands a clone to a [`crate::task::Task`]. The token is cached and fetched
 //! again a few minutes before it expires.
 
+pub mod apps;
 pub mod consent;
 pub mod devices;
 pub mod groups;
@@ -29,6 +30,9 @@ use serde_json::Value;
 use ureq::Agent;
 
 pub const GRAPH: &str = "https://graph.microsoft.com/v1.0";
+/// The beta endpoint, for the few things v1.0 does not have yet, such as
+/// when each app last signed in.
+pub const GRAPH_BETA: &str = "https://graph.microsoft.com/beta";
 pub(crate) const LOGIN: &str = "https://login.microsoftonline.com";
 const TIMEOUT: Duration = Duration::from_secs(60);
 /// Fetch a new token this long before the old one runs out, so a request is
@@ -65,6 +69,11 @@ pub const REQUIRED_ROLES: &[(&str, &str)] = &[
     ),
     ("Reports.Read.All", "Mailbox sizes and last activity"),
     ("Organization.Read.All", "Show the tenant's name"),
+    ("Application.Read.All", "List connected apps and their permissions"),
+    (
+        "Directory.Read.All",
+        "Show the delegated permissions users and admins consented to",
+    ),
 ];
 
 #[derive(Clone)]
@@ -285,14 +294,16 @@ impl Graph {
     }
 
     /// A path under [`GRAPH`], or a full URL such as an `@odata.nextLink`.
-    /// A full URL has to be Graph's own: the bearer token goes with every
-    /// request, and it must never be handed to another host.
+    /// A full URL has to be Graph's own, v1.0 or [`GRAPH_BETA`]: the bearer
+    /// token goes with every request, and it must never be handed to
+    /// another host.
     fn url(path: &str) -> Result<String> {
+        let under = |base: &str| {
+            path.starts_with(base) && matches!(path.as_bytes().get(base.len()), Some(b'/' | b'?'))
+        };
         if path.starts_with('/') {
             Ok(format!("{GRAPH}{path}"))
-        } else if path.starts_with(GRAPH)
-            && matches!(path.as_bytes().get(GRAPH.len()), Some(b'/' | b'?'))
-        {
+        } else if under(GRAPH) || under(GRAPH_BETA) {
             Ok(path.to_owned())
         } else {
             Err(format!("Refusing to send the access token outside Microsoft Graph: {path}"))
@@ -625,9 +636,13 @@ pub(crate) fn request_id(response: &ureq::http::Response<ureq::Body>) -> String 
 
 /// A request's path for the log, without Graph's address in front of a
 /// `@odata.nextLink`, and with the skip token that follows it cut short:
-/// it is long, opaque, and says nothing a reader can use.
+/// it is long, opaque, and says nothing a reader can use. A beta request
+/// keeps `/beta` in front, so the two can be told apart.
 fn shown(path: &str) -> String {
-    let path = path.strip_prefix(GRAPH).unwrap_or(path);
+    let path = path
+        .strip_prefix(GRAPH)
+        .or_else(|| path.strip_prefix("https://graph.microsoft.com"))
+        .unwrap_or(path);
     match path.find("$skiptoken=") {
         Some(at) => format!("{}$skiptoken=…", &path[..at]),
         None => path.to_owned(),
@@ -751,6 +766,10 @@ mod tests {
         assert!(Graph::url("https://graph.microsoft.com.evil.example/v1.0/users").is_err());
         assert!(Graph::url("https://evil.example/users").is_err());
         assert!(Graph::url("users").is_err());
+        let beta = format!("{GRAPH_BETA}/reports/servicePrincipalSignInActivities");
+        assert_eq!(Graph::url(&beta).unwrap(), beta);
+        assert!(Graph::url("https://graph.microsoft.com/betamax/users").is_err());
+        assert!(Graph::url("https://graph.microsoft.com/v2/users").is_err());
     }
 
     #[test]
@@ -759,6 +778,10 @@ mod tests {
         assert_eq!(
             shown(&format!("{GRAPH}/users?$top=999&$skiptoken=RFNwdAIAAQAAAD")),
             "/users?$top=999&$skiptoken=…"
+        );
+        assert_eq!(
+            shown(&format!("{GRAPH_BETA}/reports/servicePrincipalSignInActivities")),
+            "/beta/reports/servicePrincipalSignInActivities"
         );
     }
 

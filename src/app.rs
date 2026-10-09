@@ -15,6 +15,7 @@ pub enum Tab {
     Users,
     Groups,
     Devices,
+    Apps,
     Licensing,
     Logs,
     Servers,
@@ -23,11 +24,12 @@ pub enum Tab {
 }
 
 impl Tab {
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 10] = [
         Self::Connection,
         Self::Users,
         Self::Groups,
         Self::Devices,
+        Self::Apps,
         Self::Licensing,
         Self::Logs,
         Self::Servers,
@@ -41,6 +43,7 @@ impl Tab {
             Self::Users => "Users",
             Self::Groups => "Groups",
             Self::Devices => "Devices",
+            Self::Apps => "Apps",
             Self::Licensing => "Licensing",
             Self::Logs => "Logs",
             Self::Servers => "Servers",
@@ -76,6 +79,7 @@ pub struct App {
     pub users: ui::users::State,
     pub groups: ui::groups::State,
     pub devices: ui::devices::State,
+    pub apps: ui::apps::State,
     pub licensing: ui::licensing::State,
     pub logs: ui::logs::State,
     pub servers: ui::servers::State,
@@ -109,6 +113,7 @@ impl App {
             users: ui::users::State::default(),
             groups: ui::groups::State::default(),
             devices: ui::devices::State::default(),
+            apps: ui::apps::State::default(),
             licensing: ui::licensing::State::default(),
             logs: ui::logs::State::default(),
             servers: ui::servers::State::from_config(&config),
@@ -135,6 +140,7 @@ impl App {
         self.users.restore_results(results);
         self.groups = ui::groups::State::default();
         self.devices = ui::devices::State::default();
+        self.apps = ui::apps::State::default();
         self.licensing = ui::licensing::State::default();
         self.logs = ui::logs::State::default();
     }
@@ -204,6 +210,7 @@ impl App {
             .or_else(|| self.users.activity())
             .or_else(|| self.groups.activity())
             .or_else(|| self.devices.activity())
+            .or_else(|| self.apps.activity())
             .or_else(|| self.licensing.activity())
             .or_else(|| self.logs.activity())
             .or_else(|| self.servers.activity())
@@ -282,6 +289,7 @@ impl eframe::App for App {
         ui::users::poll(self);
         ui::groups::poll(self);
         ui::devices::poll(self);
+        ui::apps::poll(self);
         ui::licensing::poll(self);
         ui::logs::poll(self);
         ui::servers::poll(self);
@@ -301,6 +309,7 @@ impl eframe::App for App {
                 Tab::Users => ui::users::show(self, ui),
                 Tab::Groups => ui::groups::show(self, ui),
                 Tab::Devices => ui::devices::show(self, ui),
+                Tab::Apps => ui::apps::show(self, ui),
                 Tab::Licensing => ui::licensing::show(self, ui),
                 Tab::Logs => ui::logs::show(self, ui),
                 Tab::Servers => ui::servers::show(self, ui),

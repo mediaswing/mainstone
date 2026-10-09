@@ -1,5 +1,26 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- An **Apps** tab listing every app connected to the tenant, with its
+  publisher, its application and delegated permissions, who consented, its
+  assigned users and groups, its owners, its secrets and certificates, and
+  when it last signed in. Apps are flagged for critical or high-privilege
+  permissions, user consent, an unverified publisher, credentials expired or
+  expiring within 30 days, no use in 90 days, or being disabled, and can be
+  filtered by any of these. The list can be exported to CSV. The tab only
+  reads; it changes nothing.
+- Two permissions: `Application.Read.All` for the Apps tab, and the optional
+  `Directory.Read.All` for the delegated permissions on it. **Grant
+  Permissions…** adds them.
+
+### Changed
+
+- The tabs after Devices have moved down one: ⌘5 is now Apps, and
+  Licensing, Logs, Servers and Export are ⌘6 to ⌘9. Settings is still ⌘,.
+
 ## [1.8.0]
 
 ### Added
